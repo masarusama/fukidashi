@@ -17,7 +17,7 @@ from email.message import EmailMessage
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import gline  # noqa: E402
-from gline import mailparse, store  # noqa: E402
+from gline import mailparse, server, store  # noqa: E402
 
 gline.use_utf8_output()
 
@@ -174,6 +174,33 @@ check_true("List-Unsubscribe を一斉配信と判定", mailparse.is_bulk(_BULK)
 check("ふつうのメールは一斉配信でない",
       mailparse.is_bulk(email.message_from_string("From: a@x.com\n\nhi\n")), False)
 check_true("配信停止の文言を拾う", mailparse.is_promotional("……\n配信停止はこちら\n"))
+
+# ---------------------------------------------------------------- 受け口の防御
+
+# 127.0.0.1 で待つだけでは、ブラウザで開いた無関係なページから
+# 要求を投げられてしまう。3つの検査すべてが要る。
+_P, _T = 8765, "secret-token"
+
+
+def _req(path="/api/status", host="127.0.0.1:8765",
+         origin="http://127.0.0.1:8765", token=_T):
+    return server.check_request(_P, _T, path, host, origin, token)
+
+
+check("正規の画面からは通す", _req(), None)
+check("コマンドライン（Origin 無し）は通す", _req(origin=None), None)
+check("localhost 表記も通す",
+      _req(host="localhost:8765", origin="http://localhost:8765"), None)
+
+check("よそのサイトからの要求は断る", _req(origin="https://evil.example.com"), "origin")
+check("DNSリバインディングは Host で断る",
+      _req(host="evil.example.com:8765", origin="http://evil.example.com:8765"), "host")
+check("Host が無ければ断る", _req(host=None), "host")
+check("合言葉が無ければ api は断る", _req(token=None), "token")
+check("合言葉が違えば断る", _req(token="wrong"), "token")
+check("よそのポートを名乗っても断る", _req(host="127.0.0.1:9999"), "host")
+check("画面ファイルは合言葉なしで出す", _req(path="/", token=None), None)
+check("静的ファイルも合言葉なしで出す", _req(path="/static/app.js", token=None), None)
 
 # ---------------------------------------------------------------- 結果
 

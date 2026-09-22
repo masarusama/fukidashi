@@ -2,6 +2,7 @@
 
 import json
 import mimetypes
+import secrets as _secrets
 import sys
 import threading
 import time
@@ -23,6 +24,47 @@ def _web_dir():
 
 
 WEB = _web_dir()
+
+TOKEN_HEADER = "X-Fukidashi-Token"
+TOKEN_META = "__FUKIDASHI_TOKEN__"
+
+
+def new_token():
+    return _secrets.token_urlsafe(32)
+
+
+def allowed_origins(port):
+    return {"http://127.0.0.1:%d" % port,
+            "http://localhost:%d" % port,
+            "http://[::1]:%d" % port}
+
+
+def allowed_hosts(port):
+    return {"127.0.0.1:%d" % port, "localhost:%d" % port, "[::1]:%d" % port}
+
+
+def check_request(port, token, path, host, origin, sent_token):
+    """要求を受けてよいか判断する。断る理由を返す（問題なければ None）。
+
+    127.0.0.1 で待ち受けているだけでは守れない。ブラウザで開いた
+    まったく無関係なページが、ここへ要求を投げられてしまうため。
+
+      1. Host の検証 — DNS リバインディング対策。攻撃者が自分のドメインを
+         127.0.0.1 に向けると、ブラウザからは同一オリジンに見えてしまい、
+         Origin の検証をすり抜けてメールの中身まで読まれる。待ち受け名が
+         127.0.0.1/localhost でなければ断る。
+      2. Origin の検証 — 通常の CSRF 対策。よそのページからの要求を断る。
+      3. 合言葉 — /api/ には独自ヘッダを必須にする。独自ヘッダが付くと
+         ブラウザは事前確認（preflight）を必ず行い、こちらは許可を返さない
+         ので、よそのページからの要求はそもそも届かない。
+    """
+    if host is None or host.strip().lower() not in allowed_hosts(port):
+        return "host"
+    if origin is not None and origin.strip() not in allowed_origins(port):
+        return "origin"
+    if path.startswith("/api/") and sent_token != token:
+        return "token"
+    return None
 
 
 class SyncRunner:
@@ -77,7 +119,7 @@ class SyncRunner:
             }
 
 
-def make_handler(cfg, db, runner, control):
+def make_handler(cfg, db, runner, control, token):
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "gmail_line"
@@ -94,12 +136,26 @@ def make_handler(cfg, db, runner, control):
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
             self.end_headers()
             if self.command != "HEAD":
                 self.wfile.write(body)
 
         def _json(self, obj, code=200):
             self._send(code, json.dumps(obj, ensure_ascii=False), )
+
+        def _guard(self):
+            """通してよい要求か確かめる。駄目なら 403 を返して True。"""
+            reason = check_request(
+                cfg.port, token, urlparse(self.path).path,
+                self.headers.get("Host"), self.headers.get("Origin"),
+                self.headers.get(TOKEN_HEADER))
+            if reason is None:
+                return False
+            self._send(403, json.dumps({"error": "refused:" + reason},
+                                       ensure_ascii=False))
+            return True
 
         def _static(self, name):
             path = (WEB / name).resolve()
@@ -108,11 +164,17 @@ def make_handler(cfg, db, runner, control):
             ctype = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
             if ctype.startswith("text/") or ctype.endswith("javascript"):
                 ctype += "; charset=utf-8"
-            self._send(200, path.read_bytes(), ctype)
+            body = path.read_bytes()
+            if name == "index.html":
+                # 合言葉は、このサーバが返す画面にだけ埋め込む
+                body = body.replace(TOKEN_META.encode(), token.encode())
+            self._send(200, body, ctype)
 
         # -- ルーティング -------------------------------------------------
         def do_GET(self):
             try:
+                if self._guard():
+                    return
                 self._route()
             except BrokenPipeError:
                 pass
@@ -126,6 +188,8 @@ def make_handler(cfg, db, runner, control):
             length = int(self.headers.get("Content-Length") or 0)
             if length:
                 self.rfile.read(length)
+            if self._guard():
+                return
             path = urlparse(self.path).path
             if path == "/api/sync":
                 started = runner.start()
@@ -187,8 +251,9 @@ def serve(cfg):
     db = store.connect(cfg.db_path, cfg.primary.email)
     runner = SyncRunner(cfg)
     control = {}
+    token = new_token()
     httpd = ThreadingHTTPServer(("127.0.0.1", cfg.port),
-                                make_handler(cfg, db, runner, control))
+                                make_handler(cfg, db, runner, control, token))
     httpd.daemon_threads = True
     control["httpd"] = httpd
     httpd.gline_db = db

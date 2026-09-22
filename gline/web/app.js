@@ -37,8 +37,25 @@ const state = {
 
 /* ---------------- 共通 ---------------- */
 
+// サーバが起動ごとに発行する合言葉。この画面にだけ埋め込まれているので、
+// よそのページからは取れない（独自ヘッダなので事前確認も必要になる）。
+const TOKEN = (document.querySelector('meta[name="fukidashi-token"]') || {}).content || '';
+
+let reloading = false;
+
 async function api(path, opts) {
-  const res = await fetch(path, opts);
+  const o = Object.assign({}, opts);
+  o.headers = Object.assign({ 'X-Fukidashi-Token': TOKEN }, o.headers || {});
+  const res = await fetch(path, o);
+  if (res.status === 403) {
+    // アプリを起動し直すと合言葉が変わる。開きっぱなしの画面を繋ぎ直す。
+    if (!reloading) {
+      reloading = true;
+      toast('アプリが再起動されたため、画面を読み込み直します…', 0);
+      setTimeout(() => location.reload(), 1200);
+    }
+    throw new Error('画面を読み込み直しています');
+  }
   const data = await res.json().catch(() => ({ error: 'サーバの応答が読めませんでした' }));
   if (!res.ok || data.error) throw new Error(data.error || ('HTTP ' + res.status));
   return data;
@@ -555,7 +572,11 @@ $('sync').addEventListener('click', () => runSync(false));
 
 $('quit').addEventListener('click', async () => {
   if (!confirm('Fukidashi を終了します。\n\n再開するときは、もう一度アプリを開いてください。')) return;
-  try { await fetch('/api/quit', { method: 'POST' }); } catch (e) { /* 落ちるのが正常 */ }
+  try {
+    await fetch('/api/quit', {
+      method: 'POST', headers: { 'X-Fukidashi-Token': TOKEN },
+    });
+  } catch (e) { /* 落ちるのが正常 */ }
   const screen = document.createElement('div');
   screen.className = 'stopped';
   const box = document.createElement('div');
