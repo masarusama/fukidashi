@@ -174,17 +174,25 @@ def initial_sync(cfg):
 
 # ---------------------------------------------------------------- 起動
 
+def log(msg):
+    """~/Library/Logs/Fukidashi.log に残る（起動スクリプトが繋いでいる）。"""
+    print("[%s] %s" % (time.strftime("%H:%M:%S"), msg), flush=True)
+
+
 def already_running(port):
-    """すでに Fukidashi が動いていれば True。"""
-    import json as _json
-    import urllib.request
-    try:
-        with urllib.request.urlopen(
-                "http://127.0.0.1:%d/api/status" % port, timeout=2) as res:
-            _json.loads(res.read().decode("utf-8"))
-        return True
-    except Exception:
-        return False
+    """すでに Fukidashi が動いていれば True。
+
+    待ち受けているかどうかだけを見る。応答の中身は見ない（合言葉が
+    無ければ 403 が返るが、それは「動いている」ことの証明になる）。
+    """
+    import socket
+    with socket.socket() as sock:
+        sock.settimeout(1.5)
+        try:
+            sock.connect(("127.0.0.1", port))
+            return True
+        except OSError:
+            return False
 
 
 def main():
@@ -207,8 +215,10 @@ def main():
     url = "http://127.0.0.1:%d/" % cfg.port
     if already_running(cfg.port):
         # 2回目のダブルクリック。立ち上げ直さず、画面を出すだけ。
+        log("すでに起動していたので画面を開くだけにしました")
         webbrowser.open(url)
         return 0
+    log("サーバを起動します（ポート %d）" % cfg.port)
 
     try:
         httpd = server.serve(cfg)
@@ -245,11 +255,13 @@ def main():
         except (OSError, ValueError):
             pass
 
+    log("準備できました: %s" % url)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        log("終了します")
         server.shutdown(httpd)
     return 0
 
