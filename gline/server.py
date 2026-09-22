@@ -260,11 +260,26 @@ def make_handler(cfg, db, runner, control, token, outbox):
 
         def do_POST(self):
             length = int(self.headers.get("Content-Length") or 0)
-            if length:
-                self.rfile.read(length)
+            raw = self.rfile.read(length) if length else b""
             if self._guard():
                 return
+            try:
+                payload = json.loads(raw.decode("utf-8")) if raw else {}
+            except (ValueError, UnicodeDecodeError):
+                return self._json({"error": "本文を読めませんでした"}, 400)
+
             path = urlparse(self.path).path
+            if path == "/api/send":
+                key = (payload.get("key") or "").strip()
+                if not key:
+                    return self._json({"error": "会話が指定されていません"}, 400)
+                try:
+                    return self._json(outbox.queue(key, payload.get("text") or ""))
+                except smtpsend.SendError as exc:
+                    return self._json({"error": str(exc)}, 400)
+            if path == "/api/send/cancel":
+                return self._json(
+                    {"cancelled": outbox.cancel((payload.get("id") or "").strip())})
             if path == "/api/sync":
                 started = runner.start()
                 return self._json({"started": started, **runner.state()})
