@@ -7,6 +7,7 @@
 import json
 import re
 import sqlite3
+import threading
 from pathlib import Path
 
 from . import mailparse
@@ -65,17 +66,71 @@ FIELDS = ("account", "uid", "message_id", "conv_key", "ts", "from_addr",
           "raw")
 
 
+class Database:
+    """スレッドごとに接続を持つ SQLite。
+
+    Python の sqlite3 は threadsafety=1、つまり**接続をスレッド間で
+    共有してはいけない**。check_same_thread=False は Python 側の確認を
+    外すだけで、SQLite 自体が安全になるわけではない。複数のスレッドが
+    1つの接続を同時に触ると内部構造が壊れ、SQLITE_CORRUPT や
+    segfault（sqlite3BtreeIndexMoveto での EXC_BAD_ACCESS）になる。
+
+    ここを通す限り、どのスレッドも自分専用の接続しか触らない。
+    ファイルは WAL なので、接続が複数あっても同時に読み書きできる。
+    """
+
+    def __init__(self, path, default_account=""):
+        self.path = str(path)
+        Path(self.path).parent.mkdir(parents=True, exist_ok=True)
+        self._local = threading.local()
+        self._all = []
+        self._lock = threading.Lock()
+
+        conn = self._open()
+        conn.executescript(SCHEMA_TABLES)
+        _migrate(conn, default_account)
+        conn.executescript(SCHEMA_INDEXES)
+        conn.commit()
+
+    def _open(self):
+        conn = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        # 接続が増えるぶん、書き込みの順番待ちが起きる
+        conn.execute("PRAGMA busy_timeout=15000")
+        self._local.conn = conn
+        with self._lock:
+            self._all.append(conn)
+        return conn
+
+    @property
+    def conn(self):
+        conn = getattr(self._local, "conn", None)
+        return conn if conn is not None else self._open()
+
+    def execute(self, *args):
+        return self.conn.execute(*args)
+
+    def executescript(self, script):
+        return self.conn.executescript(script)
+
+    def commit(self):
+        return self.conn.commit()
+
+    def close(self):
+        with self._lock:
+            conns, self._all = self._all, []
+        for conn in conns:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        self._local.conn = None
+
+
 def connect(path, default_account=""):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path), timeout=30, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.executescript(SCHEMA_TABLES)
-    _migrate(conn, default_account)
-    conn.executescript(SCHEMA_INDEXES)
-    return conn
+    return Database(path, default_account)
 
 
 def _migrate(conn, default_account):
