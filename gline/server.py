@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import config, imapsync, store
+from . import config, imapsync, smtpsend, store
 
 def _web_dir():
     """画面ファイルの場所。PyInstaller で固めた .exe の中も探す。"""
@@ -119,7 +119,81 @@ class SyncRunner:
             }
 
 
-def make_handler(cfg, db, runner, control, token):
+UNDO_SECONDS = 8
+
+
+class Outbox:
+    """送信を少し待ってから実行する。
+
+    送った瞬間に取り返しがつかなくなるのを避けるための猶予。
+    画面を閉じても予定どおり送られる（取り消しは明示的な操作だけ）。
+    """
+
+    def __init__(self, cfg, db, on_sent=None):
+        self.cfg = cfg
+        self.db = db
+        self.on_sent = on_sent
+        self.lock = threading.Lock()
+        self.items = {}
+
+    def queue(self, conv_key, text):
+        ctx = smtpsend.reply_context(self.db, self.cfg, conv_key)
+        account = self.cfg.account(ctx["account"])
+        msg = smtpsend.build(account, ctx, text)
+
+        ident = _secrets.token_urlsafe(12)
+        timer = threading.Timer(UNDO_SECONDS, self._fire, args=(ident,))
+        with self.lock:
+            self.items[ident] = {
+                "id": ident, "state": "waiting", "ctx": ctx, "msg": msg,
+                "account": account, "error": None,
+                "at": time.time() + UNDO_SECONDS,
+            }
+        timer.daemon = True
+        timer.start()
+        return {"id": ident, "undo_seconds": UNDO_SECONDS,
+                "to": ctx["to_names"], "from": ctx["account"],
+                "subject": ctx["subject"]}
+
+    def cancel(self, ident):
+        with self.lock:
+            item = self.items.get(ident)
+            if item is None:
+                return False
+            if item["state"] != "waiting":
+                return False
+            item["state"] = "cancelled"
+            return True
+
+    def _fire(self, ident):
+        with self.lock:
+            item = self.items.get(ident)
+            if item is None or item["state"] != "waiting":
+                return
+            item["state"] = "sending"
+        try:
+            password = config.app_password(item["account"])
+            smtpsend.send(item["account"], password, item["msg"])
+            item["state"] = "sent"
+            if self.on_sent:
+                try:
+                    self.on_sent(item["account"])
+                except Exception:
+                    traceback.print_exc()
+        except Exception as exc:
+            item["state"] = "failed"
+            item["error"] = str(exc)
+            traceback.print_exc()
+
+    def state(self, ident):
+        with self.lock:
+            item = self.items.get(ident)
+            if item is None:
+                return None
+            return {"id": ident, "state": item["state"], "error": item["error"]}
+
+
+def make_handler(cfg, db, runner, control, token, outbox):
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "gmail_line"
@@ -235,6 +309,21 @@ def make_handler(cfg, db, runner, control, token):
                         db, key, int(one("limit", 400)),
                         int(before) if before else None, one("account")),
                 })
+            if u.path == "/api/reply_context":
+                key = one("key")
+                if not key:
+                    return self._json({"error": "key が必要です"}, 400)
+                try:
+                    ctx = smtpsend.reply_context(db, cfg, key)
+                except smtpsend.SendError as exc:
+                    return self._json({"error": str(exc)}, 400)
+                return self._json({k: v for k, v in ctx.items()
+                                   if k != "references"})
+            if u.path == "/api/send/state":
+                st = outbox.state(one("id") or "")
+                if st is None:
+                    return self._json({"error": "見つかりません"}, 404)
+                return self._json(st)
             if u.path == "/api/full":
                 uid, acct = one("uid"), one("account")
                 data = store.message_full(db, acct, int(uid)) if uid and acct else None
@@ -252,8 +341,15 @@ def serve(cfg):
     runner = SyncRunner(cfg)
     control = {}
     token = new_token()
-    httpd = ThreadingHTTPServer(("127.0.0.1", cfg.port),
-                                make_handler(cfg, db, runner, control, token))
+
+    def after_sent(account):
+        # 送信したものは Gmail の「送信済み」に入るので、少し待って取り込む
+        threading.Timer(6.0, runner.start).start()
+
+    outbox = Outbox(cfg, db, on_sent=after_sent)
+    httpd = ThreadingHTTPServer(
+        ("127.0.0.1", cfg.port),
+        make_handler(cfg, db, runner, control, token, outbox))
     httpd.daemon_threads = True
     control["httpd"] = httpd
     httpd.gline_db = db

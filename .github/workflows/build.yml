@@ -26,7 +26,9 @@ jobs:
           pip install pyinstaller keyring
 
       - name: 解析まわりのテスト
-        run: python tests/test_parsing.py
+        run: |
+          python tests/test_parsing.py
+          python tests/test_send.py
 
       - name: .exe を作る
         run: pyinstaller packaging/fukidashi.spec --noconfirm
@@ -59,7 +61,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: 解析まわりのテスト
-        run: python3 tests/test_parsing.py
+        run: |
+          python3 tests/test_parsing.py
+          python3 tests/test_send.py
 
       - name: .app を作る
         run: python3 make_app.py --zip

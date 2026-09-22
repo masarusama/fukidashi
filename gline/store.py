@@ -239,10 +239,11 @@ def classify(cfg, conv_key, mine, bulk_n, promo_n, total, senders=()):
     for pat in cfg.force_notices:
         if pat in conv_key:
             return "notice"
-    if mine > 0:
-        # こちらが返信している相手は、アドレスが何であれ「人」
-        return "people"
     if not total:
+        return "people"
+    if 0 < mine < total:
+        # やりとりが成立している相手は、アドレスが何であれ「人」。
+        # 自分の発信しかない会話（配信停止の依頼など）は対象外にする。
         return "people"
     if bulk_n * 2 >= total:          # 一斉配信のヘッダを持つ
         return "notice"

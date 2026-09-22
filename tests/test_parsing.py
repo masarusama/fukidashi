@@ -95,6 +95,9 @@ check_true("head の中身は出さない", "件名" not in mailparse.html_to_te
 check_true("引用ブロックは畳む", "引用部分" not in mailparse.html_to_text(_DOC, drop_quotes=True))
 check_true("全文側には引用も残す", "引用部分" in mailparse.html_to_text(_DOC, drop_quotes=False))
 
+check("CRLF を LF に揃える",
+      mailparse.tidy("一行目\r\n二行目\r\n"), "一行目\n二行目")
+
 # ---------------------------------------------------------------- 文字コード
 
 # ISO-2022-JP は7bitなので utf-8 でも「成功」してしまい、
@@ -157,7 +160,14 @@ check("複数人は連結したキーになる",
 
 # ---------------------------------------------------------------- 人/お知らせ
 
-check("返信していれば人", store.classify(_cfg, "s@x.com", 3, 9, 9, 9), "people")
+check("やりとりが成立していれば人", store.classify(_cfg, "s@x.com", 3, 9, 9, 9), "people")
+# 配信停止の依頼など、自分の発信しかない相手を人に入れない
+# 実際には受信が無いので senders は空になる
+check("配信停止の依頼だけの相手はお知らせ",
+      store.classify(_cfg, "abuse@x.com", 2, 0, 0, 2, []), "notice")
+check_true("VERP アドレスを機械と見なす",
+           mailparse.robot_address("1axc0ij-mr+2ename=gmail.com@bf58x.example.net"))
+check("人のアドレスは巻き込まない", mailparse.robot_address("taro.yamada@example.com"), False)
 check("配信ヘッダが多数ならお知らせ", store.classify(_cfg, "a@x.com", 0, 5, 0, 8), "notice")
 check("配信停止の導線が多数ならお知らせ", store.classify(_cfg, "a@x.com", 0, 0, 5, 8), "notice")
 check("機械アドレスだけならお知らせ", store.classify(_cfg, "noreply@x.com", 0, 0, 0, 3), "notice")

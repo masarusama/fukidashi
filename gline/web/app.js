@@ -33,6 +33,8 @@ const state = {
   exhausted: false,
   query: '',
   syncing: false,
+  replyCtx: null,     // いまの会話に返信できるか／誰に送るか
+  pendingSend: null,  // 取り消し待ちの送信
 };
 
 /* ---------------- 共通 ---------------- */
@@ -291,6 +293,8 @@ async function openConversation(key) {
   renderConversations();
 
   const acct = state.account ? `&account=${encodeURIComponent(state.account)}` : '';
+  setupCompose(conv).catch(() => hideCompose());
+
   const data = await api(
     `/api/messages?key=${encodeURIComponent(key)}&limit=${PAGE}${acct}`);
   state.messages = data.messages;
@@ -486,6 +490,173 @@ function renderStream(jump) {
   }
 }
 
+/* ---------------- 返信 ---------------- */
+
+function hideCompose(note) {
+  $('compose').hidden = true;
+  state.replyCtx = null;
+  const old = document.getElementById('noticeNote');
+  if (old) old.remove();
+  if (note) {
+    const el = document.createElement('div');
+    el.className = 'notice-note';
+    el.id = 'noticeNote';
+    el.textContent = note;
+    $('talk').appendChild(el);
+  }
+}
+
+async function setupCompose(conv) {
+  const old = document.getElementById('noticeNote');
+  if (old) old.remove();
+
+  // 通知やメルマガへの返信は、まず届かないうえに事故のもとなので出さない
+  if (!conv || conv.kind !== 'people') {
+    return hideCompose('このトークは受信専用です。返信は「人」のトークからできます。');
+  }
+  if (conv.key === 'self') {
+    return hideCompose('自分へのメモには返信できません。');
+  }
+
+  let ctx;
+  try {
+    ctx = await api('/api/reply_context?key=' + encodeURIComponent(conv.key));
+  } catch (e) {
+    return hideCompose('このトークには返信できません（' + e.message + '）');
+  }
+
+  state.replyCtx = ctx;
+  const head = $('composeHead');
+  head.textContent = '';
+
+  const line = document.createElement('div');
+  line.append(document.createTextNode('宛先 '));
+  const to = document.createElement('b');
+  to.textContent = ctx.to_names.join('、');
+  to.title = ctx.to.join(', ');
+  line.append(to, document.createTextNode('　／　差出人 '));
+  const from = document.createElement('b');
+  from.textContent = ctx.account;
+  line.append(from);
+  head.appendChild(line);
+
+  if (ctx.follow_up) {
+    const note = document.createElement('div');
+    note.textContent = 'この相手からの返信はまだありません。自分が送ったメールの続きとして送られます。';
+    head.appendChild(note);
+  }
+
+  // 別アドレス宛に届いたものへの返信は、差出人が変わることを必ず伝える
+  if (ctx.received_at) {
+    const warn = document.createElement('div');
+    warn.className = 'warn';
+    warn.textContent =
+      `このメールは ${ctx.received_at} 宛に届いたものですが、返信は ` +
+      `${ctx.account} から送られます。相手には別のアドレスとして見えます。`;
+    head.appendChild(warn);
+  }
+
+  $('compose').hidden = false;
+  $('draft').value = '';
+  $('send').disabled = true;
+  autoGrow();
+}
+
+function autoGrow() {
+  const t = $('draft');
+  t.style.height = 'auto';
+  t.style.height = Math.min(t.scrollHeight, 180) + 'px';
+}
+
+async function doSend() {
+  const text = $('draft').value.trim();
+  if (!text || !state.replyCtx || state.pendingSend) return;
+
+  $('send').disabled = true;
+  let res;
+  try {
+    res = await api('/api/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: state.replyCtx.conv_key, text }),
+    });
+  } catch (e) {
+    toast('送信できませんでした: ' + e.message, 10000);
+    $('send').disabled = false;
+    return;
+  }
+
+  $('draft').value = '';
+  autoGrow();
+  state.pendingSend = res.id;
+  showUndo(res);
+}
+
+function showUndo(res) {
+  const el = $('toast');
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  el.textContent = '';
+
+  const box = document.createElement('span');
+  box.className = 'undo';
+  const label = document.createElement('span');
+  let left = res.undo_seconds;
+  const paint = () => {
+    label.textContent = `${res.to.join('、')} に送信します（${left} 秒）`;
+  };
+  paint();
+
+  const btn = document.createElement('button');
+  btn.textContent = '取り消す';
+  btn.addEventListener('click', async () => {
+    clearInterval(tick);
+    try {
+      const r = await api('/api/send/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: res.id }),
+      });
+      toast(r.cancelled ? '送信を取り消しました' : '間に合いませんでした（すでに送信済みです）');
+    } catch (e) {
+      toast('取り消せませんでした: ' + e.message);
+    }
+    state.pendingSend = null;
+  });
+
+  box.append(label, btn);
+  el.appendChild(box);
+
+  const tick = setInterval(async () => {
+    left -= 1;
+    if (left > 0) { paint(); return; }
+    clearInterval(tick);
+    el.hidden = true;
+    await watchSend(res.id);
+  }, 1000);
+}
+
+async function watchSend(id) {
+  for (let i = 0; i < 20; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    let st;
+    try { st = await api('/api/send/state?id=' + encodeURIComponent(id)); }
+    catch (e) { break; }
+    if (st.state === 'sent') {
+      toast('送信しました。まもなくトークに表示されます。', 6000);
+      state.pendingSend = null;
+      return;
+    }
+    if (st.state === 'failed') {
+      toast('送信に失敗しました:\n' + (st.error || ''), 0);
+      state.pendingSend = null;
+      return;
+    }
+    if (st.state === 'cancelled') { state.pendingSend = null; return; }
+  }
+  state.pendingSend = null;
+}
+
 /* ---------------- 同期 ---------------- */
 
 async function refreshStatus() {
@@ -564,6 +735,19 @@ $('search').addEventListener('input', (e) => {
     loadConversations(true).catch((err) => toast(err.message));
   }, 220);
 });
+
+$('draft').addEventListener('input', () => {
+  $('send').disabled = !$('draft').value.trim() || !!state.pendingSend;
+  autoGrow();
+});
+// Enter は改行。送信は押す操作だけにして、勢いでの誤送信を防ぐ。
+$('draft').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    doSend();
+  }
+});
+$('send').addEventListener('click', () => doSend());
 
 for (const id of ['tabPeople', 'tabNotice']) {
   $(id).addEventListener('click', (e) => switchKind(e.currentTarget.dataset.kind));

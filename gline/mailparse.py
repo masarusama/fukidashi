@@ -179,6 +179,8 @@ def html_to_text(html, drop_quotes=True):
 
 
 def tidy(text):
+    # メールの改行は CRLF。そのまま持つと表示にも検索にも響く。
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = text.replace(" ", " ").replace("​", "")
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n[ \t]+", "\n", text)
@@ -422,6 +424,7 @@ _ROBOT_WORDS = (
     "mkt", "autoreply", "auto_reply", "auto-reply", "wordpress", "helpdesk",
     "shopinfo", "sales", "support", "yoyaku", "otodoke", "thanks",
     "gochuumon", "point-", "-point", "send-", "webmaster", "mailinfo",
+    "abuse", "unsubscribe", "optout", "opt-out", "remove", "list-",
 )
 # 部分一致だと巻き添えが出る短い語は、ローカル部が完全一致したときだけ
 _ROBOT_EXACT = frozenset((
@@ -459,6 +462,10 @@ def robot_address(addr):
         return False
     local, _, domain = addr.partition("@")
     local = local.lower()
+    # 配信停止や不達通知の使い捨てアドレス（VERP）は、宛先を符号化するために
+    # ローカル部に = を含む。人のアドレスには入らない記号。
+    if "=" in local:
+        return True
     if local in _ROBOT_EXACT:
         return True
     if any(w in local for w in _ROBOT_WORDS):

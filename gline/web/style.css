@@ -293,6 +293,56 @@ html, body {
   cursor: pointer;
 }
 
+/* ---------------- 返信欄 ---------------- */
+
+.compose {
+  flex: none;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  padding: 8px 14px 10px;
+}
+.compose-head {
+  font-size: 11.5px; color: var(--text-dim);
+  margin-bottom: 6px; line-height: 1.5;
+}
+.compose-head b { color: var(--text); font-weight: 600; }
+.compose-head .warn { color: var(--unread); }
+
+.compose-row { display: flex; gap: 8px; align-items: flex-end; }
+
+.compose textarea {
+  flex: 1; min-width: 0; resize: none;
+  font: inherit; font-size: 14px; line-height: 1.5;
+  max-height: 180px;
+  padding: 9px 13px; border-radius: 16px;
+  border: 1px solid var(--border);
+  background: var(--panel-2); color: var(--text);
+}
+.compose textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+.send-btn {
+  flex: none; font: inherit; font-size: 13px; font-weight: 700;
+  padding: 9px 18px; border-radius: 999px; border: none;
+  background: var(--accent); color: #fff; cursor: pointer;
+}
+.send-btn:disabled { opacity: .4; cursor: default; }
+
+.notice-note {
+  flex: none; border-top: 1px solid var(--border);
+  background: var(--panel); color: var(--text-faint);
+  font-size: 12px; padding: 12px 14px; text-align: center;
+}
+
+.undo {
+  display: inline-flex; align-items: center; gap: 12px;
+}
+.undo button {
+  font: inherit; font-size: 12px; font-weight: 700;
+  padding: 4px 12px; border-radius: 999px;
+  border: 1px solid var(--unread); background: none;
+  color: var(--unread); cursor: pointer;
+}
+
 /* ---------------- toast ---------------- */
 
 .stopped {
