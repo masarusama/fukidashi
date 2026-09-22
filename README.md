@@ -152,6 +152,25 @@ python3 serve.py           # 画面を開く（右上の「同期」ボタンで
 | `port` | `8765` | ローカルサーバーのポート |
 | `db_path` | `data/mail.db` | データの置き場所（絶対パス可） |
 
+### アプリとコマンドの併用
+
+アプリで読みつつ、たまにコマンドで手入れする使い方ができます。
+手元に `config.json` が無ければ、コマンドは自動でアプリ側の設定を見ます。
+
+```bash
+python3 reprocess.py     # アプリのデータに対して本文を作り直す
+python3 sync.py          # アプリのデータに取り込む
+```
+
+アプリを起動したままでも構いません（SQLite が同時アクセスを処理します）。
+明示したい場合は `GMAIL_LINE_CONFIG` で設定ファイルを指定してください。
+
+| | 設定ファイル |
+|---|---|
+| macOS | `~/Library/Application Support/Fukidashi/config.json` |
+| Windows | `%APPDATA%\Fukidashi\config.json` |
+| Linux | `~/.config/fukidashi/config.json` |
+
 ### 定型文の削り方
 
 引用剥がしに加えて、次は自動で落とします。

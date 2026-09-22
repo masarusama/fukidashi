@@ -118,13 +118,31 @@ def _strip_comment_keys(data):
     return {k: v for k, v in data.items() if not k.startswith("//")}
 
 
+def app_config_path():
+    """Fukidashi.app が使う設定ファイルの場所。"""
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "Fukidashi" / "config.json"
+    if os.name == "nt":
+        base = os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming")
+        return Path(base) / "Fukidashi" / "config.json"
+    return Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config")) / "fukidashi" / "config.json"
+
+
 def load(path=None):
-    path = Path(path or os.environ.get("GMAIL_LINE_CONFIG") or ROOT / "config.json")
+    if path is None:
+        path = os.environ.get("GMAIL_LINE_CONFIG")
+    if path is None:
+        # 手元に config.json が無ければ、アプリ側の設定を使う。
+        # アプリで読み、たまにコマンドで手入れする、という使い方のため。
+        local = ROOT / "config.json"
+        path = local if local.exists() else app_config_path()
+    path = Path(path)
     if not path.exists():
         raise ConfigError(
-            "設定ファイルが見つかりません: %s\n"
-            "  cp config.example.json config.json\n"
-            "してから accounts を書き換えてください。" % path
+            "設定ファイルが見つかりません: %s\n\n"
+            "  python3 setup.py\n\n"
+            "を実行するか、config.example.json を config.json に複製して\n"
+            "accounts を書き換えてください。" % path
         )
     with path.open(encoding="utf-8") as fh:
         raw = _strip_comment_keys(json.load(fh))
