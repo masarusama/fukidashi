@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Fukidashi.app の中身。ターミナルを使わずに設定と起動をこなす。
+"""Fukidashi の GUI 入口。ターミナルを使わずに設定と起動をこなす。
 
 初回はダイアログで設定を作り、2回目以降はそのまま画面を開く。
-設定とデータは ~/Library/Application Support/Fukidashi/ に置く
-（アプリ本体の中には書かない）。
+設定とデータは OS ごとの標準の場所に置く（アプリ本体の中には書かない）。
+
+  macOS   ~/Library/Application Support/Fukidashi/
+  Windows %APPDATA%\Fukidashi\
+  Linux   ~/.config/fukidashi/
 """
 
 import json
@@ -19,7 +22,14 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-SUPPORT = Path.home() / "Library" / "Application Support" / "Fukidashi"
+def _support_dir():
+    # 置き場所の決め方は gline.config と揃える
+    sys.path.insert(0, str(HERE))
+    from gline import config as _cfg
+    return _cfg.app_config_path().parent
+
+
+SUPPORT = _support_dir()
 # 設定の場所は環境変数で差し替えられる（動作確認や、既存の設定を使いたいとき）
 CONFIG = Path(os.environ.get("GMAIL_LINE_CONFIG") or (SUPPORT / "config.json"))
 DB = SUPPORT / "mail.db"
@@ -35,45 +45,47 @@ def _boot():
 
 _boot()
 
-from gline import config, imapsync, macui, secrets, server, store  # noqa: E402
+from gline import config, imapsync, secrets, server, store, ui  # noqa: E402
 
 
 # ---------------------------------------------------------------- 初回設定
 
 def first_run():
-    macui.alert(
+    ui.alert(
         "Fukidashi へようこそ。\n\n"
         "Gmail を会話の形で読むための道具です。\n"
         "メールはこのパソコンの中だけで処理され、Gmail 以外のどこにも送られません。\n\n"
-        "はじめに、読みたい Gmail アカウントを登録します。")
+        "はじめに、読みたい Gmail アカウントを登録します。\n\n"
+        "設定が終わるとブラウザで開きます。画面右上の「終了」を押すまで、"
+        "うしろで動き続けます。")
 
     accounts = []
     while True:
-        email = macui.ask("Gmail のアドレスを入力してください", title="アカウントの登録")
+        email = ui.ask("Gmail のアドレスを入力してください", title="アカウントの登録")
         email = email.strip().lower()
         if "@" not in email:
-            macui.error("アドレスの形式が違うようです。")
+            ui.error("アドレスの形式が違うようです。")
             continue
 
-        label = macui.ask("画面に表示する短い名前を決めてください",
+        label = ui.ask("画面に表示する短い名前を決めてください",
                           email.split("@")[0], title="アカウントの登録")
 
         aliases = []
-        if macui.confirm(
+        if ui.confirm(
                 "このアカウントに、別のアドレス宛のメールが\n"
                 "転送されて届いていますか？\n\n"
                 "（届いているのに登録しないと、会話がばらばらに表示されます）",
                 yes="登録する", no="ない"):
             while True:
-                a = macui.ask("転送元のアドレス", title="別アドレスの登録").strip().lower()
+                a = ui.ask("転送元のアドレス", title="別アドレスの登録").strip().lower()
                 if "@" in a:
                     aliases.append(a)
-                if not macui.confirm("もう1つ登録しますか？", yes="登録する", no="終わり"):
+                if not ui.confirm("もう1つ登録しますか？", yes="登録する", no="終わり"):
                     break
 
         accounts.append({"email": email, "label": label, "aliases": aliases})
 
-        if not macui.confirm("もう1つアカウントを追加しますか？",
+        if not ui.confirm("もう1つアカウントを追加しますか？",
                              yes="追加する", no="これで完了"):
             break
 
@@ -91,7 +103,7 @@ def first_run():
     cfg = config.load(CONFIG)
     for account in cfg.accounts:
         if not setup_password(cfg, account):
-            macui.error("%s は設定できませんでした。\n"
+            ui.error("%s は設定できませんでした。\n"
                         "あとでもう一度アプリを起動すると、やり直せます。" % account.email)
     return cfg
 
@@ -100,28 +112,28 @@ def setup_password(cfg, account):
     if secrets.get(account.email):
         return True
 
-    macui.alert(
+    ui.alert(
         "%s のアプリパスワードが必要です。\n\n"
         "これは Google アカウント本体のパスワードではなく、\n"
         "アプリ専用に発行する16桁のパスワードです。\n"
         "（2段階認証が有効になっている必要があります）\n\n"
         "次に開くページで作成して、コピーしてきてください。" % account.email,
         title="アプリパスワード", ok="ページを開く")
-    macui.open_url(APP_PASSWORD_URL)
+    ui.open_url(APP_PASSWORD_URL)
 
     for _ in range(3):
         try:
-            pw = macui.ask("作成した16桁のアプリパスワードを貼り付けてください\n"
+            pw = ui.ask("作成した16桁のアプリパスワードを貼り付けてください\n"
                            "（%s）" % account.email,
                            hidden=True, title="アプリパスワード")
-        except macui.Cancelled:
+        except ui.Cancelled:
             return False
         if not pw.strip():
             continue
         try:
             secrets.put(account.email, pw)
         except secrets.SecretError as exc:
-            macui.error("保存できませんでした。\n%s" % exc)
+            ui.error("保存できませんでした。\n%s" % exc)
             return False
 
         try:
@@ -130,7 +142,7 @@ def setup_password(cfg, account):
             imap.logout()
             return True
         except Exception as exc:
-            if not macui.confirm(
+            if not ui.confirm(
                     "Gmail にログインできませんでした。\n\n%s\n\n"
                     "パスワードを入力し直しますか？" % exc,
                     yes="やり直す", no="あとで"):
@@ -141,7 +153,7 @@ def setup_password(cfg, account):
 # ---------------------------------------------------------------- 取り込み
 
 def initial_sync(cfg):
-    macui.notify("メールの取り込みを始めます（数分かかります）")
+    ui.notify("メールの取り込みを始めます（数分かかります）")
     db = store.connect(cfg.db_path, cfg.primary.email)
     got = 0
     for account in cfg.accounts:
@@ -153,7 +165,7 @@ def initial_sync(cfg):
     store.mark_duplicates(db)
     s = store.stats(db, cfg)
     db.close()
-    macui.notify("%d 通 / %d 会話 を取り込みました" % (s["messages"], s["conversations"]))
+    ui.notify("%d 通 / %d 会話 を取り込みました" % (s["messages"], s["conversations"]))
     return got
 
 
@@ -179,12 +191,12 @@ def main():
         else:
             cfg = first_run()
             threading.Thread(target=initial_sync, args=(cfg,), daemon=True).start()
-    except macui.Cancelled:
+    except ui.Cancelled:
         return 0
     except Exception as exc:
         traceback.print_exc()
         try:
-            macui.error("設定中に問題が起きました。\n\n%s" % exc)
+            ui.error("設定中に問題が起きました。\n\n%s" % exc)
         except Exception:
             pass
         return 1
@@ -200,7 +212,7 @@ def main():
     except Exception as exc:
         # よくある2つの失敗を、原因が分かる言葉で出す
         if "authorization denied" in str(exc) or isinstance(exc, PermissionError):
-            macui.error(
+            ui.error(
                 "データの置き場所を開けませんでした。\n\n%s\n\n"
                 "macOS のプライバシー保護により、アプリからこの場所を\n"
                 "読めません。iCloud や Google ドライブの中を指している\n"
@@ -209,11 +221,11 @@ def main():
                 "~/Library/Application Support/Fukidashi/mail.db など）に\n"
                 "変えてください。\n\n設定: %s" % (exc, CONFIG))
         elif isinstance(exc, OSError):
-            macui.error("ポート %d を使えませんでした。\n\n%s\n\n"
+            ui.error("ポート %d を使えませんでした。\n\n%s\n\n"
                         "Fukidashi がすでに起動しているかもしれません。"
                         % (cfg.port, exc))
         else:
-            macui.error("起動できませんでした。\n\n%s\n\n"
+            ui.error("起動できませんでした。\n\n%s\n\n"
                         "詳しい記録: ~/Library/Logs/Fukidashi.log" % exc)
         return 1
 

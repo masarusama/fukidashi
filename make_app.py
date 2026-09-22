@@ -21,7 +21,7 @@ NAME = "Fukidashi"
 BUNDLE_ID = "com.github.masarusama.fukidashi"
 
 # アプリの中に入れるもの。個人の設定とデータは絶対に入れない。
-PAYLOAD_FILES = ["macapp.py", "sync.py", "serve.py", "reprocess.py",
+PAYLOAD_FILES = ["app.py", "sync.py", "serve.py", "reprocess.py",
                  "setup.py", "README.md", "LICENSE"]
 PAYLOAD_DIRS = ["gline"]
 
@@ -42,7 +42,7 @@ fi
 LOG="$HOME/Library/Logs/Fukidashi.log"
 mkdir -p "$(dirname "$LOG")"
 echo "--- $(date) 起動 ---" >> "$LOG"
-exec /usr/bin/python3 "$APPDIR/macapp.py" >> "$LOG" 2>&1
+exec /usr/bin/python3 "$APPDIR/app.py" >> "$LOG" 2>&1
 """
 
 

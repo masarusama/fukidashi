@@ -2,6 +2,7 @@
 
 import json
 import mimetypes
+import sys
 import threading
 import time
 import traceback
@@ -11,7 +12,17 @@ from urllib.parse import parse_qs, urlparse
 
 from . import config, imapsync, store
 
-WEB = Path(__file__).resolve().parent / "web"
+def _web_dir():
+    """画面ファイルの場所。PyInstaller で固めた .exe の中も探す。"""
+    bundled = getattr(sys, "_MEIPASS", None)
+    if bundled:
+        packed = Path(bundled) / "gline" / "web"
+        if packed.is_dir():
+            return packed
+    return Path(__file__).resolve().parent / "web"
+
+
+WEB = _web_dir()
 
 
 class SyncRunner:

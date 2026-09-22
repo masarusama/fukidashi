@@ -1,0 +1,82 @@
+name: build
+
+# タグを打つと Windows の .exe と macOS の .app を作り、Releases に添付する。
+# 手動実行（workflow_dispatch）では成果物だけ作って動作を確かめられる。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 依存を入れる
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller keyring
+
+      - name: 取り込みや解析が動くか確かめる
+        run: |
+          python -c "import gline.mailparse, gline.store, gline.server, gline.ui, gline.secrets; print('import ok')"
+          python -c "
+          from gline.mailparse import strip_quotes, html_to_text
+          body = '了解しました。\n\nOn Mon, Jan 5, 2026 at 9:02 AM A <a@x> wrote:\n> もとの本文\n'
+          assert strip_quotes(body) == '了解しました。', strip_quotes(body)
+          doc = '<html><head><meta charset=\"utf-8\"><title>x</title></head><body><p>本文</p></body></html>'
+          assert '本文' in html_to_text(doc), html_to_text(doc)
+          print('parser ok')
+          "
+
+      - name: .exe を作る
+        run: pyinstaller packaging/fukidashi.spec --noconfirm
+
+      - name: 起動できるか確かめる
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist/Fukidashi.exe")) { throw "Fukidashi.exe が作られていません" }
+          $size = (Get-Item "dist/Fukidashi.exe").Length / 1MB
+          Write-Host ("できました: {0:N1} MB" -f $size)
+
+      - name: zip にまとめる
+        shell: pwsh
+        run: Compress-Archive -Path dist/Fukidashi.exe -DestinationPath dist/Fukidashi-Windows.zip -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Fukidashi-Windows
+          path: dist/Fukidashi-Windows.zip
+
+      - name: Releases に添付する
+        if: startsWith(github.ref, 'refs/tags/')
+        run: gh release upload "${{ github.ref_name }}" dist/Fukidashi-Windows.zip --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: .app を作る
+        run: python3 make_app.py --zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Fukidashi-macOS
+          path: dist/Fukidashi-macOS.zip
+
+      - name: Releases に添付する
+        if: startsWith(github.ref, 'refs/tags/')
+        run: gh release upload "${{ github.ref_name }}" dist/Fukidashi-macOS.zip --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
