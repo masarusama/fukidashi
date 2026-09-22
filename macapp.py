@@ -8,6 +8,7 @@
 
 import json
 import os
+import signal
 import sys
 import threading
 import time
@@ -158,6 +159,19 @@ def initial_sync(cfg):
 
 # ---------------------------------------------------------------- 起動
 
+def already_running(port):
+    """すでに Fukidashi が動いていれば True。"""
+    import json as _json
+    import urllib.request
+    try:
+        with urllib.request.urlopen(
+                "http://127.0.0.1:%d/api/status" % port, timeout=2) as res:
+            _json.loads(res.read().decode("utf-8"))
+        return True
+    except Exception:
+        return False
+
+
 def main():
     try:
         if CONFIG.exists():
@@ -174,6 +188,12 @@ def main():
         except Exception:
             pass
         return 1
+
+    url = "http://127.0.0.1:%d/" % cfg.port
+    if already_running(cfg.port):
+        # 2回目のダブルクリック。立ち上げ直さず、画面を出すだけ。
+        webbrowser.open(url)
+        return 0
 
     try:
         httpd = server.serve(cfg)
@@ -197,15 +217,25 @@ def main():
                         "詳しい記録: ~/Library/Logs/Fukidashi.log" % exc)
         return 1
 
-    url = "http://127.0.0.1:%d/" % cfg.port
     if not os.environ.get("FUKIDASHI_NO_BROWSER"):
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+
+    # ログアウトや再起動、強制終了でも DB を壊さずに終える
+    def _stop(signum, frame):
+        threading.Thread(target=httpd.shutdown, daemon=True).start()
+
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        try:
+            signal.signal(sig, _stop)
+        except (OSError, ValueError):
+            pass
+
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
-        httpd.server_close()
+        server.shutdown(httpd)
     return 0
 
 

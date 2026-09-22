@@ -80,6 +80,8 @@ html, body {
   cursor: pointer;
 }
 .sync:hover { background: var(--sel); }
+.sync.quit { color: var(--text-faint); }
+.sync.quit:hover { color: #fff; background: var(--unread); border-color: transparent; }
 .sync[disabled] { opacity: .55; cursor: default; }
 
 .accounts { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 9px; }
@@ -292,6 +294,13 @@ html, body {
 }
 
 /* ---------------- toast ---------------- */
+
+.stopped {
+  position: fixed; inset: 0; z-index: 100;
+  display: grid; place-items: center; text-align: center;
+  background: var(--bg); color: var(--text-dim);
+  font-size: 15px; line-height: 2;
+}
 
 .toast {
   position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);

@@ -66,7 +66,7 @@ class SyncRunner:
             }
 
 
-def make_handler(cfg, db, runner):
+def make_handler(cfg, db, runner, control):
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "gmail_line"
@@ -115,9 +115,17 @@ def make_handler(cfg, db, runner):
             length = int(self.headers.get("Content-Length") or 0)
             if length:
                 self.rfile.read(length)
-            if urlparse(self.path).path == "/api/sync":
+            path = urlparse(self.path).path
+            if path == "/api/sync":
                 started = runner.start()
                 return self._json({"started": started, **runner.state()})
+            if path == "/api/quit":
+                self._json({"quitting": True})
+                httpd = control.get("httpd")
+                if httpd is not None:
+                    # 応答を返しきってから止める
+                    threading.Timer(0.3, httpd.shutdown).start()
+                return
             self._json({"error": "not found"}, 404)
 
         def _route(self):
@@ -167,6 +175,34 @@ def make_handler(cfg, db, runner):
 def serve(cfg):
     db = store.connect(cfg.db_path, cfg.primary.email)
     runner = SyncRunner(cfg)
-    httpd = ThreadingHTTPServer(("127.0.0.1", cfg.port), make_handler(cfg, db, runner))
+    control = {}
+    httpd = ThreadingHTTPServer(("127.0.0.1", cfg.port),
+                                make_handler(cfg, db, runner, control))
     httpd.daemon_threads = True
+    control["httpd"] = httpd
+    httpd.gline_db = db
     return httpd
+
+
+def shutdown(httpd):
+    """待ち受けを止め、DB を安全に閉じる。
+
+    書き込み途中で落とされると SQLite が中途半端な状態で残り、次の起動で
+    「database disk image is malformed」になることがある。終了経路は必ずここを通す。
+    """
+    try:
+        httpd.server_close()
+    except Exception:
+        pass
+    db = getattr(httpd, "gline_db", None)
+    if db is None:
+        return
+    try:
+        db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        db.commit()
+    except Exception:
+        pass
+    try:
+        db.close()
+    except Exception:
+        pass

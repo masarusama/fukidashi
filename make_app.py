@@ -114,6 +114,9 @@ def build():
         "CFBundlePackageType": "APPL",
         "LSMinimumSystemVersion": "11.0",
         "NSHighResolutionCapable": True,
+        # 画面はブラウザ側にあるので、Dock には出さない常駐アプリにする。
+        # 終了は画面右上の「終了」ボタンから。
+        "LSUIElement": True,
         "LSApplicationCategoryType": "public.app-category.productivity",
         "NSHumanReadableCopyright": "MIT License",
     }

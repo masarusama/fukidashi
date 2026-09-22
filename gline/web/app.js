@@ -479,9 +479,16 @@ async function refreshStatus() {
   if (state.account && !state.accounts.some((a) => a.email === state.account)) {
     state.account = '';   // 設定から消えたアカウントを選んだままにしない
   }
-  $('me').textContent = state.accounts.length > 1
-    ? state.accounts.map((a) => a.email).join('  /  ')
+  // 幅が狭いのでアドレスをそのまま並べると2つめが省略されて「1つしか
+  // 同期していない」ように見える。複数あるときは短い名前を出す。
+  const multi = state.accounts.length > 1;
+  $('me').textContent = multi
+    ? state.accounts.map((a) => a.label).join(' ・ ')
     : (state.accounts[0] || {}).email || '';
+  $('me').title = state.accounts.map((a) => a.email).join('\n');
+  $('sync').title = multi
+    ? `新着を取り込む（${state.accounts.length} アカウントすべて）`
+    : '新着を取り込む';
   const st = s.stats;
   const parts = [`${st.conversations} 会話 / ${st.messages} 通`];
   if (st.duplicates) parts.push(`重複 ${st.duplicates} 通は1通表示`);
@@ -545,6 +552,22 @@ for (const id of ['tabPeople', 'tabNotice']) {
   $(id).addEventListener('click', (e) => switchKind(e.currentTarget.dataset.kind));
 }
 $('sync').addEventListener('click', () => runSync(false));
+
+$('quit').addEventListener('click', async () => {
+  if (!confirm('Fukidashi を終了します。\n\n再開するときは、もう一度アプリを開いてください。')) return;
+  try { await fetch('/api/quit', { method: 'POST' }); } catch (e) { /* 落ちるのが正常 */ }
+  const screen = document.createElement('div');
+  screen.className = 'stopped';
+  const box = document.createElement('div');
+  box.textContent = 'Fukidashi を終了しました。';
+  const sub = document.createElement('div');
+  sub.style.fontSize = '13px';
+  sub.textContent = 'このタブは閉じて構いません。';
+  box.appendChild(document.createElement('br'));
+  box.appendChild(sub);
+  screen.appendChild(box);
+  document.body.appendChild(screen);
+});
 $('back').addEventListener('click', () => $('app').classList.remove('show-talk'));
 
 document.addEventListener('keydown', (e) => {

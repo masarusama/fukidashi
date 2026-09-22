@@ -31,7 +31,7 @@ def main(argv):
     except KeyboardInterrupt:
         print("\n終了します。")
     finally:
-        httpd.server_close()
+        server.shutdown(httpd)
     return 0
 
 
