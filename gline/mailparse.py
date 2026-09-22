@@ -238,8 +238,14 @@ def _tail_cut(text, matcher, need=1):
             continue
         if need > 1 and sum(1 for l in lines[i:] if matcher.match(l)) < need:
             continue
-        if len(text) - offsets[i] > half:
-            continue
+        # ここまでで「後半にある定型ブロック」と判断できている
+        # （後半という条件だけで、削る量は自然に半分以下になる）。
+        # あとは同じ種類の行が続く限り先頭へ戻す。〒 と TEL が並ぶ署名で
+        # 〒 だけ残るのを防ぐため、ブロック全体を対象にする。
+        while i > 0 and matcher.match(lines[i - 1]):
+            i -= 1
+        if not text[:offsets[i]].strip():
+            continue        # 本文が丸ごと消えるなら見送る
         return offsets[i]
     return None
 

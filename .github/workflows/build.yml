@@ -25,17 +25,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller keyring
 
-      - name: 取り込みや解析が動くか確かめる
-        run: |
-          python -c "import gline.mailparse, gline.store, gline.server, gline.ui, gline.secrets; print('import ok')"
-          python -c "
-          from gline.mailparse import strip_quotes, html_to_text
-          body = '了解しました。\n\nOn Mon, Jan 5, 2026 at 9:02 AM A <a@x> wrote:\n> もとの本文\n'
-          assert strip_quotes(body) == '了解しました。', strip_quotes(body)
-          doc = '<html><head><meta charset=\"utf-8\"><title>x</title></head><body><p>本文</p></body></html>'
-          assert '本文' in html_to_text(doc), html_to_text(doc)
-          print('parser ok')
-          "
+      - name: 解析まわりのテスト
+        run: python tests/test_parsing.py
 
       - name: .exe を作る
         run: pyinstaller packaging/fukidashi.spec --noconfirm
@@ -66,6 +57,9 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: 解析まわりのテスト
+        run: python3 tests/test_parsing.py
 
       - name: .app を作る
         run: python3 make_app.py --zip
