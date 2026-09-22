@@ -8,10 +8,12 @@
 
 import sys
 
+import gline
 from gline import config, imapsync, store
 
 
 def main(argv):
+    gline.use_utf8_output()
     try:
         cfg = config.load()
     except config.ConfigError as exc:

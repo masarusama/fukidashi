@@ -16,7 +16,10 @@ from email.message import EmailMessage
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import gline  # noqa: E402
 from gline import mailparse, store  # noqa: E402
+
+gline.use_utf8_output()
 
 PASS, FAIL = [], []
 

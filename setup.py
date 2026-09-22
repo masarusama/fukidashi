@@ -14,6 +14,7 @@ import sys
 import webbrowser
 from pathlib import Path
 
+import gline
 from gline import config, imapsync, secrets, store
 
 APP_PASSWORD_URL = "https://myaccount.google.com/apppasswords"
@@ -132,6 +133,7 @@ def check_login(cfg, account):
 
 
 def main():
+    gline.use_utf8_output()
     rule("Gmail を会話として読むための初期設定")
     print("パスワードは OS の保管庫に入るだけで、設定ファイルには書きません。")
     print("このプログラムは Gmail 以外のどこにも接続しません。")

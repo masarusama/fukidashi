@@ -8,10 +8,12 @@ strip_patterns を足したときや、解析を直したときはこれを実�
 import sys
 import zlib
 
+import gline
 from gline import config, imapsync, store
 
 
 def main():
+    gline.use_utf8_output()
     try:
         cfg = config.load()
     except config.ConfigError as exc:

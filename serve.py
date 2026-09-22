@@ -9,10 +9,12 @@ import sys
 import threading
 import webbrowser
 
+import gline
 from gline import config, server
 
 
 def main(argv):
+    gline.use_utf8_output()
     try:
         cfg = config.load()
     except config.ConfigError as exc:

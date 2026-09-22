@@ -45,7 +45,10 @@ def _boot():
 
 _boot()
 
+import gline  # noqa: E402
 from gline import config, imapsync, secrets, server, store, ui  # noqa: E402
+
+gline.use_utf8_output()
 
 
 # ---------------------------------------------------------------- 初回設定
