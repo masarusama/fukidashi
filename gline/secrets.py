@@ -81,8 +81,11 @@ def put(email, password):
         raise SecretError("空のパスワードは保存できません。")
 
     if IS_MAC:
+        # パスワードはコマンド引数に置かない（同じマシンの ps から見えてしまう）。
+        # security は -w を値なしで渡すと標準入力から2回読む。
         out = _run(["security", "add-generic-password", "-U",
-                    "-s", SERVICE, "-a", email, "-w", password])
+                    "-s", SERVICE, "-a", email, "-w"],
+                   stdin="%s\n%s\n" % (password, password))
         if out.returncode == 0:
             return "macOS キーチェーン"
         raise SecretError("キーチェーンに保存できませんでした: %s"

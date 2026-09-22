@@ -38,7 +38,23 @@ Gmail が読みにくい原因は見た目ではなくデータの持ち方な�
 
 追加のライブラリは要りません。標準ライブラリだけで動きます。
 
-## はじめかた
+## はじめかた（Mac・ターミナルを使わない場合）
+
+[Releases](../../releases) から `Fukidashi-macOS.zip` を落として展開し、
+`Fukidashi.app` を「アプリケーション」に入れてダブルクリックしてください。
+初回はアカウントとアプリパスワードを画面の案内どおりに入れるだけです。
+
+**初回だけ「開発元を確認できないため開けません」と出ます。** 署名していない
+アプリなので macOS がそう言います。アプリを**右クリック → 開く**を選び、
+もう一度「開く」を押すと起動できます（2回目以降はふつうにダブルクリックで開きます）。
+
+自分でビルドする場合:
+
+```bash
+python3 make_app.py --zip
+```
+
+## はじめかた（ターミナルを使う場合）
 
 ```bash
 git clone https://github.com/<あなた>/fukidashi.git
@@ -89,7 +105,7 @@ cp config.example.json config.json
 
 ```bash
 # macOS
-security add-generic-password -U -s gmail_line -a you@gmail.com -w
+security add-generic-password -U -s gmail_line -a you@gmail.com -w   # 対話入力
 # Windows
 python -c "import keyring,getpass;keyring.set_password('gmail_line','you@gmail.com',getpass.getpass())"
 # Linux
@@ -169,7 +185,24 @@ Gmail には接続しません。
 
 ## データの扱い
 
-すべて `data/mail.db`（SQLite）1ファイルに入ります。消せば取り込み前に戻ります。
+すべて SQLite の1ファイルに入ります。消せば取り込み前に戻ります。
+
+| 使い方 | 置き場所 |
+|---|---|
+| アプリ | `~/Library/Application Support/Fukidashi/mail.db` |
+| コマンド | `data/mail.db`（`db_path` で変更可） |
+
+**クラウド同期フォルダ（iCloud / Google ドライブ / Dropbox）に置かないでください。**
+理由は2つあります。
+
+1. SQLite は複数の機械から同時に触られることを想定していません。同期の途中に
+   書き込みが重なると壊れます。
+2. macOS のプライバシー保護により、アプリからこれらのフォルダを読めず
+   `authorization denied` で起動できません。
+
+複数の機械で使いたい場合は、**それぞれの機械で取り込んでください。** メールの
+正本は Gmail 側にあり、このファイルは手元の写しにすぎないので、同期させる
+必要がありません。
 
 **このファイルにはメール本文と受信した生データが、暗号化されずに入っています。**
 再解析のために生データを保存しているためで、そのぶんサイズも大きめです
@@ -178,6 +211,11 @@ Gmail には接続しません。
 置き場所は `db_path` で変えられます。
 
 ## 困ったとき
+
+**アプリが起動しない／すぐ落ちる**
+`~/Library/Logs/Fukidashi.log` に理由が残ります。
+`authorization denied` と出ている場合は、データの置き場所がクラウド同期
+フォルダになっています（上の「データの扱い」を参照）。
 
 **アカウントを足したのに何も出ない**
 そのアカウントをまだ同期していません。`python3 sync.py` を実行してください。
