@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fukidashi</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app" id="app">
+
+  <aside class="sidebar" id="sidebar">
+    <div class="side-head">
+      <div class="side-title">
+        <span class="me" id="me">…</span>
+        <button class="sync" id="sync" title="新着を取り込む">同期</button>
+      </div>
+      <div class="accounts" id="accounts" hidden></div>
+      <div class="tabs" id="tabs" role="tablist">
+        <button class="tab" id="tabPeople" role="tab" data-kind="people">
+          <span>人</span><em id="cntPeople"></em>
+        </button>
+        <button class="tab" id="tabNotice" role="tab" data-kind="notice">
+          <span>お知らせ</span><em id="cntNotice"></em>
+        </button>
+      </div>
+      <div class="searchbox">
+        <input id="search" type="search" placeholder="名前・本文で検索  （/）" autocomplete="off">
+      </div>
+      <div class="side-stat" id="stat"></div>
+    </div>
+    <ul class="convs" id="convs"></ul>
+  </aside>
+
+  <main class="talk" id="talk">
+    <header class="talk-head">
+      <button class="back" id="back" aria-label="一覧へ戻る">‹</button>
+      <div class="talk-title">
+        <div class="talk-name" id="talkName">会話を選んでください</div>
+        <div class="talk-sub" id="talkSub"></div>
+      </div>
+    </header>
+    <div class="stream" id="stream">
+      <div class="empty" id="empty">
+        <p>左の一覧から相手を選ぶと、やりとりが時系列で並びます。</p>
+      </div>
+    </div>
+  </main>
+
+</div>
+
+<div class="toast" id="toast" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

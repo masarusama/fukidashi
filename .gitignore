@@ -1,0 +1,7 @@
+# 個人の設定と取り込んだメール。絶対にコミットしない。
+config.json
+data/
+
+__pycache__/
+*.pyc
+.DS_Store

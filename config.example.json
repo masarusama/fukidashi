@@ -1,0 +1,28 @@
+{
+  "//accounts": "読みたいメールボックス。1つでも複数でも書けます。",
+  "accounts": [
+    {
+      "email": "you@gmail.com",
+      "label": "メイン",
+      "//aliases": "自分の別アドレス。転送で届いている別ドメインのアドレスも必ず入れる。",
+      "aliases": []
+    }
+  ],
+
+  "//initial_days": "初回同期で何日分さかのぼるか。",
+  "initial_days": 90,
+
+  "//strip_patterns": "本文から消したい定型文（正規表現）。足したら reprocess.py を実行。",
+  "strip_patterns": [],
+
+  "//force_people": "必ず「人」タブに入れる相手（部分一致）。",
+  "force_people": [],
+
+  "//force_notices": "必ず「お知らせ」タブに入れる相手（部分一致）。",
+  "force_notices": [],
+
+  "//mute": "どちらのタブにも出さない相手（部分一致）。",
+  "mute": [],
+
+  "port": 8765
+}
