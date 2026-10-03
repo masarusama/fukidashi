@@ -99,9 +99,25 @@ class SyncRunner:
 
     def _run(self):
         try:
-            passwords = {a.email: config.app_password(a) for a in self.cfg.accounts}
+            passwords, missing = {}, []
+            for a in self.cfg.accounts:
+                try:
+                    passwords[a.email] = config.app_password(a)
+                except config.MissingPassword as exc:
+                    missing.append((a, exc))
+            if not passwords:
+                # 1つも使えないなら、理由をそのまま見せる
+                raise missing[0][1]
             n = imapsync.sync_all(self.cfg, passwords, progress=self._log)
-            self._log("完了: %d 件を取り込みました。" % n)
+            note = ""
+            if missing:
+                note = "（%s はパスワード未設定のため飛ばしました。アプリを開き直すと入力できます）" % \
+                    "、".join(a.label for a, _ in missing)
+            self._log("完了: %d 件を取り込みました。%s" % (n, note))
+        except config.MissingPassword as exc:
+            # 設定の途中という想定内の状態。記録を汚さない。
+            self.error = str(exc)
+            self._log("エラー: %s" % exc)
         except Exception as exc:
             self.error = str(exc)
             self._log("エラー: %s" % exc)

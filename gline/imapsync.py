@@ -249,6 +249,9 @@ def sync_all(cfg, passwords, conn_db=None, progress=log):
     total = 0
     try:
         for account in cfg.accounts:
+            if account.email not in passwords:
+                progress("── %s ── パスワード未設定のため飛ばしました" % account.label)
+                continue
             progress("── %s ──" % account.label)
             total += sync(cfg, account, passwords[account.email],
                           conn_db=db, progress=progress)

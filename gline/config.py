@@ -162,22 +162,38 @@ def load(path=None):
     return Config(merged)
 
 
+# アプリ（.app / .exe）から動いているときは True。コマンドを打てない人が
+# 読むので、案内の文言を切り替える。
+APP_MODE = False
+
+
+class MissingPassword(ConfigError):
+    """アプリパスワードがまだ保存されていない。"""
+
+    def __init__(self, email):
+        self.email = email
+        if APP_MODE:
+            msg = ("%s のアプリパスワードがまだ保存されていません。\n\n"
+                   "画面右上の「終了」を押してから、Fukidashi をもう一度開いてください。"
+                   "入力画面が出ます。" % email)
+        else:
+            msg = ("%s のアプリパスワードが保存されていません。\n\n"
+                   "  python3 setup.py\n\n"
+                   "を実行すると、作り方から保存まで順に案内します。\n"
+                   "自分で保存する場合は次のコマンドです:\n\n%s\n"
+                   % (email, secrets.manual_instructions(email)))
+        super().__init__(msg)
+
+
 def app_password(account):
-    """アカウントのアプリパスワードを取得する。無ければ作り方を案内する。"""
+    """アカウントのアプリパスワードを取得する。無ければ MissingPassword。"""
     try:
         value = secrets.get(account.email)
     except secrets.SecretError as exc:
         raise ConfigError(str(exc))
     if value:
         return value
-
-    raise ConfigError(
-        "%s のアプリパスワードが保存されていません。\n\n"
-        "  python3 setup.py\n\n"
-        "を実行すると、作り方から保存まで順に案内します。\n"
-        "自分で保存する場合は次のコマンドです:\n\n"
-        "%s\n" % (account.email, secrets.manual_instructions(account.email))
-    )
+    raise MissingPassword(account.email)
 
 
 def die(msg):

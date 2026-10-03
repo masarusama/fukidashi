@@ -93,6 +93,89 @@ else:
 
 check_true("記録を書いても落ちない", app.log("テスト") is None)
 
+# ---------------------------------------------------------------- パスワードの入れ直し
+
+# 初回設定の途中でやめると、設定ファイルだけが残る。次に開いたとき入力画面が
+# 出なければ、入れ直す手段が無い（実際に Windows で起こった）。
+from gline import config as _config  # noqa: E402
+
+
+class _Acc:
+    def __init__(self, email, label):
+        self.email, self.label = email, label
+
+
+_cfg2 = type("C", (), {"accounts": [_Acc("a@x.com", "A"), _Acc("b@x.com", "B")]})()
+
+_have = {"a@x.com": "pw"}                       # a は保存済み、b は未保存
+app.secrets.get = lambda e: _have.get(e)
+asked, setups = [], []
+app.ui.confirm = lambda msg, **k: asked.append(msg) or True
+app.setup_password = lambda cfg, acc: setups.append(acc.email) or True
+
+check("未保存のアカウントだけ確かめる", app.ensure_passwords(_cfg2), 1)
+check("保存済みには聞かない", [("a@x.com" in m) for m in asked], [False])
+check("未保存のアカウントを入力に回す", setups, ["b@x.com"])
+
+asked.clear(); setups.clear()
+app.ui.confirm = lambda msg, **k: asked.append(msg) or False        # 「あとで」
+check("あとでを選べば入力しない", app.ensure_passwords(_cfg2), 0)
+check("あとでなら設定画面に進まない", setups, [])
+
+_have["b@x.com"] = "pw"
+asked.clear()
+check("全部そろっていれば何も聞かない", app.ensure_passwords(_cfg2), 0)
+check("聞いていない", asked, [])
+
+# ---------------------------------------------------------------- 案内の文言
+
+_config.APP_MODE = True
+msg_app = str(_config.MissingPassword("a@x.com"))
+check("アプリでは python3 を案内しない", "python3" in msg_app, False)
+check_true("アプリでは開き直しを案内する", "もう一度開いて" in msg_app)
+_config.APP_MODE = False
+check_true("コマンドでは setup.py を案内する",
+           "setup.py" in str(_config.MissingPassword("a@x.com")))
+_config.APP_MODE = True
+
+# ---------------------------------------------------------------- 一部だけでも同期
+
+from gline import imapsync, server, store  # noqa: E402
+
+
+class _SyncCfg:
+    accounts = [_Acc("a@x.com", "A"), _Acc("b@x.com", "B")]
+    primary = accounts[0]
+    db_path = os.path.join(_tmp, "sync.db")
+
+
+synced = []
+imapsync.sync = lambda cfg, acc, pw, conn_db=None, progress=None: synced.append(acc.email) or 2
+
+
+def _run(passwords):
+    def fake(a):
+        if a.email in passwords:
+            return passwords[a.email]
+        raise _config.MissingPassword(a.email)
+    server.config.app_password = fake
+    r = server.SyncRunner(_SyncCfg())
+    r._run()
+    return r
+
+
+synced.clear()
+r = _run({"a@x.com": "pw"})                     # b だけ未保存
+check("未保存でも、あるぶんは同期する", synced, ["a@x.com"])
+check("全体は失敗扱いにしない", r.error, None)
+check_true("飛ばしたことを伝える", any("未設定" in l for l in r.lines))
+
+synced.clear()
+r = _run({})                                    # 1つも使えない
+check("1つも無ければ同期しない", synced, [])
+check_true("理由がそのまま出る", r.error and "アプリパスワード" in r.error)
+check("その案内に python3 が含まれない", "python3" in (r.error or ""), False)
+
 print("%d 件成功 / %d 件失敗" % (len(PASS), len(FAIL)))
 if FAIL:
     print()

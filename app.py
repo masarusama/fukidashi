@@ -84,6 +84,8 @@ _boot()
 import gline  # noqa: E402
 from gline import config, imapsync, secrets, server, store, ui  # noqa: E402
 
+config.APP_MODE = True   # 案内の文言を、コマンドを使わない人向けにする
+
 gline.use_utf8_output()
 
 
@@ -142,9 +144,37 @@ def first_run():
     cfg = config.load(CONFIG)
     for account in cfg.accounts:
         if not setup_password(cfg, account):
-            ui.error("%s は設定できませんでした。\n"
-                        "あとでもう一度アプリを起動すると、やり直せます。" % account.email)
+            ui.error("%s は設定できませんでした。\n\n"
+                     "もう一度 Fukidashi を開くと、入力画面が出ます。" % account.email)
     return cfg
+
+
+def ensure_passwords(cfg):
+    """アプリパスワードが保存されていないアカウントに、入力を促す。
+
+    初回設定は、設定ファイルを書いてからパスワードを聞く。途中でやめると
+    設定だけが残り、次に開いたときは「設定済み」として入力画面を飛ばして
+    しまう。そうなるとパスワードを入れ直す手段が無くなる（コマンドを使えない
+    人には特に）ので、開くたびに欠けているものだけを確かめる。
+
+    新しく保存できた数を返す。
+    """
+    saved = 0
+    for account in cfg.accounts:
+        try:
+            if secrets.get(account.email):
+                continue
+        except secrets.SecretError:
+            pass
+        if not ui.confirm(
+                "%s のアプリパスワードが、まだ保存されていません。\n\n"
+                "いま入力しますか？\n"
+                "（「あとで」を選ぶと、このアカウントは読み込まれません）" % account.email,
+                yes="入力する", no="あとで", title="アプリパスワード"):
+            continue
+        if setup_password(cfg, account):
+            saved += 1
+    return saved
 
 
 def setup_password(cfg, account):
@@ -280,6 +310,8 @@ def main():
     try:
         if CONFIG.exists():
             cfg = config.load(CONFIG)
+            if ensure_passwords(cfg):
+                threading.Thread(target=initial_sync, args=(cfg,), daemon=True).start()
         else:
             cfg = first_run()
             threading.Thread(target=initial_sync, args=(cfg,), daemon=True).start()
