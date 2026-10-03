@@ -36,9 +36,45 @@ DB = SUPPORT / "mail.db"
 APP_PASSWORD_URL = "https://myaccount.google.com/apppasswords"
 
 
+def _log_path():
+    """記録の置き場所。macOS は起動スクリプトが向け先を決めている。"""
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Logs" / "Fukidashi.log"
+    return SUPPORT / "Fukidashi.log"
+
+
+LOG_PATH = None
+
+
+def _setup_logging():
+    """コンソールを持たない .exe のために、記録をファイルへ向ける。
+
+    Windows 版はコンソール窓を出さない設定で作っているため、
+    sys.stdout が無い。そのままだと print が黙って捨てられ、
+    起動に失敗しても手がかりが何も残らない。
+    """
+    global LOG_PATH
+    LOG_PATH = _log_path()
+    if sys.stdout is not None and sys.stderr is not None:
+        return                      # macOS: 起動スクリプトが受けている
+    try:
+        LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        if LOG_PATH.exists() and LOG_PATH.stat().st_size > 1_000_000:
+            LOG_PATH.unlink()       # 際限なく太らせない
+        handle = open(LOG_PATH, "a", encoding="utf-8", buffering=1)
+    except OSError:
+        return
+    if sys.stdout is None:
+        sys.stdout = handle
+    if sys.stderr is None:
+        sys.stderr = handle
+    handle.write("--- %s 起動 ---\n" % time.strftime("%Y-%m-%d %H:%M:%S"))
+
+
 def _boot():
     """設定の場所を教えてから gline を読み込む。"""
     SUPPORT.mkdir(parents=True, exist_ok=True)
+    _setup_logging()
     os.environ["GMAIL_LINE_CONFIG"] = str(CONFIG)
     CONFIG.parent.mkdir(parents=True, exist_ok=True)
 
@@ -239,7 +275,7 @@ def main():
                         % (cfg.port, exc))
         else:
             ui.error("起動できませんでした。\n\n%s\n\n"
-                        "詳しい記録: ~/Library/Logs/Fukidashi.log" % exc)
+                        "詳しい記録: %s" % (exc, LOG_PATH))
         return 1
 
     if not os.environ.get("FUKIDASHI_NO_BROWSER"):

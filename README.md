@@ -304,7 +304,8 @@ Python の `sqlite3` は `threadsafety=1`、つまり**接続をスレッド間�
 ## 困ったとき
 
 **アプリが起動しない／すぐ落ちる**
-`~/Library/Logs/Fukidashi.log` に理由が残ります。
+記録に理由が残ります。Windows は `%APPDATA%\Fukidashi\Fukidashi.log`、
+Mac は `~/Library/Logs/Fukidashi.log` です。
 `authorization denied` と出ている場合は、データの置き場所がクラウド同期
 フォルダになっています（上の「データの扱い」を参照）。
 
