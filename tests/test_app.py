@@ -75,8 +75,21 @@ srv.close()
 
 # ---------------------------------------------------------------- その他
 
+check("ふつうの場所なら素通り", app.check_translocated(), False)
 if sys.platform != "darwin":
-    check("macOS 以外では移動の確認をしない", app.check_translocated(), False)
+    check("macOS 以外では確認そのものをしない", app.check_translocated(), False)
+else:
+    # 一時領域から起動された状況を作って、止まることを確かめる
+    import pathlib as _pl
+    real_here, real_error = app.HERE, app.ui.error
+    shown = []
+    app.HERE = _pl.Path("/private/var/folders/x/T/AppTranslocation/ABC/d/Fukidashi.app")
+    app.ui.error = lambda *a, **k: shown.append(a)
+    try:
+        check("一時領域からの起動は止める", app.check_translocated(), True)
+        check("案内を出す", len(shown), 1)
+    finally:
+        app.HERE, app.ui.error = real_here, real_error
 
 check_true("記録を書いても落ちない", app.log("テスト") is None)
 

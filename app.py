@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fukidashi の GUI 入口。ターミナルを使わずに設定と起動をこなす。
+r"""Fukidashi の GUI 入口。ターミナルを使わずに設定と起動をこなす。
 
 初回はダイアログで設定を作り、2回目以降はそのまま画面を開く。
 設定とデータは OS ごとの標準の場所に置く（アプリ本体の中には書かない）。
@@ -215,6 +215,27 @@ def log(msg):
     print("[%s] %s" % (time.strftime("%H:%M:%S"), msg), flush=True)
 
 
+def check_translocated():
+    """ダウンロードしたまま開かれていないか確かめる。
+
+    macOS は、隔離属性の付いたアプリを置かれた場所から直接開くと、
+    読み取り専用の一時領域に写して実行する（App Translocation）。
+    その領域はあとで消えるため、アプリは生きているのに自分のファイルを
+    読めなくなり、画面が出なくなる。移動してもらうしかない。
+    """
+    if sys.platform != "darwin":
+        return False
+    if "/AppTranslocation/" not in str(HERE):
+        return False
+    ui.error(
+        "Fukidashi を「アプリケーション」フォルダに移動してから開いてください。\n\n"
+        "ダウンロードした場所のまま開くと、macOS がアプリを一時領域に\n"
+        "写して動かすため、しばらくすると画面が出なくなります。\n\n"
+        "Finder で Fukidashi を「アプリケーション」へドラッグしてから、\n"
+        "もう一度開いてください。")
+    return True
+
+
 def install_signal_handlers(handler):
     """終了の合図を受け取る。受け取れたものの名前を返す。
 
@@ -253,6 +274,9 @@ def already_running(port):
 
 
 def main():
+    if check_translocated():
+        log("ダウンロード場所から起動されたため中止しました: %s" % HERE)
+        return 1
     try:
         if CONFIG.exists():
             cfg = config.load(CONFIG)
