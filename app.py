@@ -215,6 +215,27 @@ def log(msg):
     print("[%s] %s" % (time.strftime("%H:%M:%S"), msg), flush=True)
 
 
+def install_signal_handlers(handler):
+    """終了の合図を受け取る。受け取れたものの名前を返す。
+
+    どの合図があるかは OS による。SIGHUP は Windows に無く、
+    SIGBREAK は Windows にしかない。タプルにまとめて書くと、
+    組み立てる時点で AttributeError になり try の外で落ちる
+    （実際に Windows 版がこれで起動できなかった）。
+    """
+    installed = []
+    for name in ("SIGTERM", "SIGINT", "SIGHUP", "SIGBREAK"):
+        sig = getattr(signal, name, None)
+        if sig is None:
+            continue
+        try:
+            signal.signal(sig, handler)
+            installed.append(name)
+        except (OSError, ValueError, RuntimeError):
+            pass
+    return installed
+
+
 def already_running(port):
     """すでに Fukidashi が動いていれば True。
 
@@ -285,11 +306,7 @@ def main():
     def _stop(signum, frame):
         threading.Thread(target=httpd.shutdown, daemon=True).start()
 
-    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-        try:
-            signal.signal(sig, _stop)
-        except (OSError, ValueError):
-            pass
+    install_signal_handlers(_stop)
 
     log("準備できました: %s" % url)
     try:
