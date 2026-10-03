@@ -75,10 +75,31 @@ if errors:
 
 check = db.execute("PRAGMA integrity_check").fetchone()[0]
 count = db.execute("SELECT COUNT(*) c FROM messages").fetchone()["c"]
+
+# 接続が増えていないこと。ThreadingHTTPServer はリクエストごとに
+# スレッドを作るので、スレッドごとに接続を開くと際限なく増え、
+# しばらく動かしたあと「Too many open files」で動かなくなる。
+conns = db.open_connections()
+fds = None
+if os.path.isdir("/dev/fd"):
+    fds = len([f for f in os.listdir("/dev/fd")])
+
 db.close()
 
 print("エラーなし / 通数 %d / 整合性 %s" % (count, check))
+print("%d スレッドが使ったあとの接続数: %d" % (THREADS, conns))
+if fds is not None:
+    print("プロセスが開いているファイル: %d" % fds)
+
+bad = []
 if check != "ok" or count != 300:
-    print("✗ データが壊れました")
+    bad.append("データが壊れました")
+if conns != 1:
+    bad.append("接続が %d 本に増えています（1本であるべき）" % conns)
+if fds is not None and fds > 120:
+    bad.append("開いているファイルが多すぎます: %d" % fds)
+if bad:
+    for b in bad:
+        print("✗", b)
     sys.exit(1)
 print("すべて通りました。")

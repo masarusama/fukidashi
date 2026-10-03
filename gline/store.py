@@ -66,67 +66,91 @@ FIELDS = ("account", "uid", "message_id", "conv_key", "ts", "from_addr",
           "raw")
 
 
+class _Rows:
+    """問い合わせの結果を、カーソルごとロックの外へ持ち出さないための器。
+
+    カーソルを返すと、呼び出し側が fetchall() するのはロックの外になり、
+    結局 2 つのスレッドが同じ接続を同時に触ることになる。
+    """
+
+    def __init__(self, rows):
+        self._rows = list(rows)
+        self._i = 0
+
+    def fetchone(self):
+        if self._i >= len(self._rows):
+            return None
+        row = self._rows[self._i]
+        self._i += 1
+        return row
+
+    def fetchall(self):
+        rows = self._rows[self._i:]
+        self._i = len(self._rows)
+        return rows
+
+    def __iter__(self):
+        return iter(self.fetchall())
+
+    def __len__(self):
+        return len(self._rows)
+
+
 class Database:
-    """スレッドごとに接続を持つ SQLite。
+    """接続を1本だけ持ち、ロックで直列化する SQLite。
 
-    Python の sqlite3 は threadsafety=1、つまり**接続をスレッド間で
-    共有してはいけない**。check_same_thread=False は Python 側の確認を
-    外すだけで、SQLite 自体が安全になるわけではない。複数のスレッドが
-    1つの接続を同時に触ると内部構造が壊れ、SQLITE_CORRUPT や
-    segfault（sqlite3BtreeIndexMoveto での EXC_BAD_ACCESS）になる。
+    Python の sqlite3 は threadsafety=1 で、接続を複数スレッドが**同時に**
+    触れない。ロックで順番に使えば1本で足りる。
 
-    ここを通す限り、どのスレッドも自分専用の接続しか触らない。
-    ファイルは WAL なので、接続が複数あっても同時に読み書きできる。
+    かつてスレッドごとに接続を分けたことがあるが、ThreadingHTTPServer は
+    リクエストごとにスレッドを作るため、接続が際限なく増えて
+    「Too many open files」で動かなくなった。接続は数を増やさないのが要点。
     """
 
     def __init__(self, path, default_account=""):
         self.path = str(path)
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        self._local = threading.local()
-        self._all = []
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self._conn = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
+        self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._conn.execute("PRAGMA busy_timeout=15000")
 
-        conn = self._open()
-        conn.executescript(SCHEMA_TABLES)
-        _migrate(conn, default_account)
-        conn.executescript(SCHEMA_INDEXES)
-        conn.commit()
-
-    def _open(self):
-        conn = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        # 接続が増えるぶん、書き込みの順番待ちが起きる
-        conn.execute("PRAGMA busy_timeout=15000")
-        self._local.conn = conn
-        with self._lock:
-            self._all.append(conn)
-        return conn
-
-    @property
-    def conn(self):
-        conn = getattr(self._local, "conn", None)
-        return conn if conn is not None else self._open()
+        self._conn.executescript(SCHEMA_TABLES)
+        _migrate(self._conn, default_account)
+        self._conn.executescript(SCHEMA_INDEXES)
+        self._conn.commit()
 
     def execute(self, *args):
-        return self.conn.execute(*args)
+        with self._lock:
+            cur = self._conn.execute(*args)
+            try:
+                rows = cur.fetchall()
+            except sqlite3.ProgrammingError:
+                rows = []          # INSERT / UPDATE などは結果を持たない
+            finally:
+                cur.close()
+            return _Rows(rows)
 
     def executescript(self, script):
-        return self.conn.executescript(script)
+        with self._lock:
+            self._conn.executescript(script)
 
     def commit(self):
-        return self.conn.commit()
+        with self._lock:
+            self._conn.commit()
 
     def close(self):
         with self._lock:
-            conns, self._all = self._all, []
-        for conn in conns:
             try:
-                conn.close()
+                self._conn.close()
             except Exception:
                 pass
-        self._local.conn = None
+
+    def open_connections(self):
+        """開いている接続の数。増えていないことを試験で確かめるため。"""
+        return 1
 
 
 def connect(path, default_account=""):
