@@ -44,9 +44,15 @@ def _run(cmd, stdin=None):
         raise SecretError("コマンドを実行できませんでした（%s）: %s" % (cmd[0], exc))
 
 
-def get(email):
-    """保存されているパスワードを返す。無ければ None。"""
-    for key in (env_key(email), "GMAIL_LINE_APP_PASSWORD"):
+def get(email, generic_env=True):
+    """保存されているパスワードを返す。無ければ None。
+
+    generic_env を False にすると、全アカウント共通の環境変数
+    （GMAIL_LINE_APP_PASSWORD）は見ない。Gmail のパスワード以外の
+    秘密（API キーなど）を、うっかりそれで返さないため。
+    """
+    names = (env_key(email),) + (("GMAIL_LINE_APP_PASSWORD",) if generic_env else ())
+    for key in names:
         val = os.environ.get(key)
         if val:
             return val.replace(" ", "")
@@ -106,6 +112,22 @@ def put(email, password):
             return "secret-tool"
 
     raise SecretError(how_to_install())
+
+
+def delete(email):
+    """保存してあるものを消す。もともと無ければ何もしない。"""
+    if IS_MAC:
+        _run(["security", "delete-generic-password", "-s", SERVICE, "-a", email])
+        return
+    kr = _keyring()
+    if kr is not None:
+        try:
+            kr.delete_password(SERVICE, email)
+        except Exception:
+            pass
+        return
+    if not IS_WINDOWS:
+        _run(["secret-tool", "clear", "service", SERVICE, "account", email])
 
 
 def how_to_install():

@@ -36,6 +36,10 @@ const state = {
   replyCtx: null,     // いまの会話に返信できるか／誰に送るか
   pendingSend: null,  // 取り消し待ちの送信
   local: false,       // このパソコンの中の画面か（スマホからの画面なら false）
+  ai: null,           // この会話での AI の状態（設定・許可）
+  aiBusy: false,
+  aiLast: '',        // 直前に出た案（「もう一案」で渡す）
+  aiHint: '',
 };
 
 /* ---------------- 共通 ---------------- */
@@ -50,8 +54,10 @@ async function api(path, opts) {
   const o = Object.assign({}, opts);
   o.headers = Object.assign({ 'X-Fukidashi-Token': TOKEN }, o.headers || {});
   const res = await fetch(path, o);
-  if (res.status === 403) {
-    // アプリを起動し直すと合言葉が変わる。開きっぱなしの画面を繋ぎ直す。
+  const data = await res.json().catch(() => ({ error: 'サーバの応答が読めませんでした' }));
+  // 守りに断られたとき（合言葉が違う等）だけ、画面を繋ぎ直す。
+  // アプリを起動し直すと合言葉が変わるため。403 なら何でも、ではない。
+  if (res.status === 403 && /^refused:/.test(String(data.error))) {
     if (!reloading) {
       reloading = true;
       toast('アプリが再起動されたため、画面を読み込み直します…', 0);
@@ -59,7 +65,6 @@ async function api(path, opts) {
     }
     throw new Error('画面を読み込み直しています');
   }
-  const data = await res.json().catch(() => ({ error: 'サーバの応答が読めませんでした' }));
   if (!res.ok || data.error) throw new Error(data.error || ('HTTP ' + res.status));
   return data;
 }
@@ -499,6 +504,8 @@ function renderStream(jump) {
 
 function hideCompose(note) {
   $('compose').hidden = true;
+  $('aiRow').hidden = true;
+  state.ai = null;
   state.replyCtx = null;
   const old = document.getElementById('noticeNote');
   if (old) old.remove();
@@ -565,6 +572,8 @@ async function setupCompose(conv) {
   $('draft').value = '';
   $('send').disabled = true;
   autoGrow();
+  state.aiLast = '';
+  setupAi(conv).catch(() => { state.ai = null; $('aiRow').hidden = true; });
 }
 
 function autoGrow() {
@@ -690,6 +699,7 @@ async function refreshStatus() {
   state.local = !!s.local;
   $('phone').hidden = !state.local;
   $('quit').hidden = !state.local;
+  $('aiSet').hidden = !state.local;   // API キーの設定もパソコンの中だけ
   if (state.accounts.map((a) => a.email).join(',') !== known) renderAccounts();
   if (state.account && !state.accounts.some((a) => a.email === state.account)) {
     state.account = '';   // 設定から消えたアカウントを選んだままにしない
@@ -782,6 +792,7 @@ function closePhoneSheet() {
 }
 
 async function openPhoneSheet() {
+  $('sheetTitle').textContent = 'スマホで見る';
   $('sheet').hidden = false;
   await renderPhoneSheet();
   clearInterval(phoneTimer);
@@ -884,6 +895,224 @@ async function renderPhoneOn(body, st) {
 $('phone').addEventListener('click', () => openPhoneSheet().catch((e) => toast(e.message)));
 $('sheetClose').addEventListener('click', closePhoneSheet);
 $('sheet').addEventListener('click', (e) => { if (e.target === $('sheet')) closePhoneSheet(); });
+
+/* ---------------- AI で返信案 ---------------- */
+
+const postBody = (path, obj) => api(path, {
+  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(obj),
+});
+
+const AI_CONSENT_TEXT =
+  'この会話の直近10通（引用・署名を除いた本文）を、Google の Gemini API に送って、' +
+  '返信案を作ります。\n\n' +
+  '無料枠では、送った内容が Google の製品改善に使われ、人が読むことがあります。' +
+  'Google は、無料枠に個人情報や機密情報を送らないよう求めています。\n\n' +
+  'この会話で使いますか？（あとから「使わない」に変えられます）';
+
+async function setupAi(conv) {
+  state.ai = null;
+  $('aiRow').hidden = true;
+  if (!conv) return;
+  const key = conv.key;
+  const st = await api('/api/ai?key=' + encodeURIComponent(key));
+  if (state.activeKey !== key) return;          // 返事を待つ間に、別の会話へ移った
+  // 設定が無い・対象外の会話には、何も出さない
+  if (!st.configured || !st.eligible) return;
+  state.ai = st;
+  renderAiRow();
+}
+
+function renderAiRow() {
+  const row = $('aiRow');
+  row.textContent = '';
+  const st = state.ai;
+  if (!st) { row.hidden = true; return; }
+  row.hidden = false;
+
+  if (st.consent === 'blocked') {
+    row.appendChild(elt('span', 'ai-note', 'この会話では AI を使わない設定です。'));
+    const on = elt('button', 'ai-link', '使えるようにする');
+    on.addEventListener('click', () => aiSetConsent('unset'));
+    row.appendChild(on);
+    return;
+  }
+
+  const hint = elt('input');
+  hint.type = 'text';
+  hint.maxLength = 300;
+  hint.placeholder = '指示（任意）　例: 断る方向で／日程を相談したい';
+  hint.value = state.aiHint || '';
+  hint.addEventListener('input', () => { state.aiHint = hint.value; });
+  hint.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); aiSuggest(false); }
+  });
+  const go = elt('button', 'ai-btn primary', state.aiBusy ? '考え中…' : 'AI で返信案');
+  go.disabled = state.aiBusy;
+  go.addEventListener('click', () => aiSuggest(false));
+  row.append(hint, go);
+
+  if (state.aiLast) {
+    const more = elt('button', 'ai-btn', 'もう一案');
+    more.disabled = state.aiBusy;
+    more.addEventListener('click', () => aiSuggest(true));
+    row.appendChild(more);
+  }
+  const off = elt('button', 'ai-link', 'この会話では使わない');
+  off.addEventListener('click', () => aiSetConsent('blocked'));
+  row.appendChild(off);
+}
+
+async function aiSetConsent(value) {
+  const key = state.activeKey;
+  try {
+    const r = await postBody('/api/ai/consent', { key, value });
+    if (state.activeKey === key && state.ai) {
+      state.ai.consent = r.consent;
+      renderAiRow();
+    }
+  } catch (e) {
+    toast('設定を変えられませんでした: ' + e.message, 8000);
+  }
+}
+
+async function aiSuggest(more) {
+  if (!state.ai || state.aiBusy || state.pendingSend) return;
+  const key = state.activeKey;
+
+  // 会話ごとに、初めて使うときだけ確認する
+  if (state.ai.consent !== 'allowed') {
+    if (!confirm(AI_CONSENT_TEXT)) return;
+    try {
+      await postBody('/api/ai/consent', { key, value: 'allowed' });
+      state.ai.consent = 'allowed';
+    } catch (e) {
+      toast('許可を記録できませんでした: ' + e.message, 8000);
+      return;
+    }
+  }
+
+  const draft = $('draft');
+  if (!more && draft.value.trim() &&
+      !confirm('入力欄の文章を、AI の案で置き換えます。よろしいですか？')) return;
+
+  state.aiBusy = true;
+  renderAiRow();
+  try {
+    const res = await postBody('/api/ai/suggest', {
+      key, instruction: state.aiHint || '', previous: more ? state.aiLast : '',
+    });
+    // 待つ間に別の会話へ移っていたら、その会話の入力欄には入れない
+    if (state.activeKey !== key) return;
+    draft.value = res.text;
+    state.aiLast = res.text;
+    $('send').disabled = !draft.value.trim();
+    autoGrow();
+    draft.focus();
+    toast('AI の案を入力欄に入れました。内容を確かめて、直してから送ってください。', 7000);
+  } catch (e) {
+    if (state.activeKey === key) toast('AI の案を作れませんでした:\n' + e.message, 12000);
+  } finally {
+    state.aiBusy = false;
+    if (state.activeKey === key) renderAiRow();
+  }
+}
+
+async function openAiSheet() {
+  $('sheetTitle').textContent = 'AI で返信案';
+  $('sheet').hidden = false;
+  clearInterval(phoneTimer);
+  phoneTimer = null;
+  await renderAiSheet();
+}
+
+async function renderAiSheet() {
+  const body = $('sheetBody');
+  body.textContent = '';
+  let st;
+  try {
+    st = await api('/api/ai/settings');
+  } catch (e) {
+    body.appendChild(elt('p', null, '状態を取得できませんでした: ' + e.message));
+    return;
+  }
+  body.appendChild(elt('p', null,
+    '返信を書くとき「AI で返信案」を押すと、Google の Gemini が案を作って入力欄に入れます。' +
+    '自動では送りません。'));
+  const ul = elt('ul');
+  for (const t of [
+    `押した会話の直近 ${st.window} 通の本文（引用・署名を除く。1通 ${st.max_chars} 字まで）だけを送ります。` +
+      '添付・他の会話・メールアドレス・相手の表示名は送りません。',
+    '会話ごとに、初めて使うときに確認します。あとから「この会話では使わない」にできます。',
+    '「お知らせ」と、自分へのメモでは使えません。',
+    `使うモデル: ${st.models.join(' → ')}（上限に達したときは、次のモデルに替えます）`,
+  ]) ul.appendChild(elt('li', null, t));
+  body.appendChild(ul);
+  body.appendChild(elt('div', 'warn',
+    '無料枠の注意: Google の規約では、無料枠に送った内容は製品の改善に使われ、' +
+    '人が読むことがあります。Google は、無料枠に個人情報や機密情報を送らないよう求めています。' +
+    '相手の個人情報が含まれる会話や、医療・法務・お金の話では使わないでください。' +
+    '課金を有効にした API キーでは、この扱いが変わります（最新の規約をご確認ください）。'));
+
+  const label = !st.configured ? '未保存'
+    : st.source === 'env' ? '環境変数 GEMINI_API_KEY を使用中' : '保存済み（OS の保管庫）';
+  body.appendChild(elt('p', 'sheet-meta', 'API キー: ' + label));
+
+  if (st.source !== 'env') {
+    const field = elt('input', 'sheet-field');
+    field.type = 'password';
+    field.autocomplete = 'off';
+    field.placeholder = 'AI Studio の API キーを貼り付け';
+    body.appendChild(field);
+    const save = async () => {
+      const value = field.value;
+      if (!value.trim()) return;
+      try {
+        await postBody('/api/ai/key', { value });
+        field.value = '';
+        toast('API キーを保存しました。', 4000);
+        await renderAiSheet();
+        if (state.activeKey) {
+          const conv = state.conversations.find((c) => c.key === state.activeKey);
+          setupAi(conv).catch(() => {});
+        }
+      } catch (e) {
+        toast('保存できませんでした: ' + e.message, 10000);
+      }
+    };
+    field.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
+    const actions = elt('div', 'sheet-actions');
+    const saveBtn = elt('button', 'sheet-btn primary', '保存');
+    saveBtn.addEventListener('click', save);
+    actions.appendChild(saveBtn);
+    if (st.configured) {
+      const del = elt('button', 'sheet-btn danger', '削除');
+      del.addEventListener('click', async () => {
+        if (!confirm('保存してある API キーを削除します。')) return;
+        try {
+          await postBody('/api/ai/key/delete', {});
+          await renderAiSheet();
+          setupAi(state.conversations.find((c) => c.key === state.activeKey)).catch(() => {});
+        } catch (e) {
+          toast('削除できませんでした: ' + e.message, 10000);
+        }
+      });
+      actions.appendChild(del);
+    }
+    body.appendChild(actions);
+  }
+
+  const help = elt('p', 'sheet-meta');
+  help.appendChild(document.createTextNode('API キーは '));
+  const a = elt('a', null, 'Google AI Studio');
+  a.href = 'https://aistudio.google.com/apikey';
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer';
+  help.appendChild(a);
+  help.appendChild(document.createTextNode(' で作れます。キーは OS の保管庫にだけ保存し、画面には再表示しません。'));
+  body.appendChild(help);
+}
+
+$('aiSet').addEventListener('click', () => openAiSheet().catch((e) => toast(e.message)));
 
 /* ---------------- 起動 ---------------- */
 

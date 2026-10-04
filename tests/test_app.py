@@ -196,6 +196,14 @@ check_true("パソコンの画面にだけ終了・スマホのボタンを出�
            _status and "$('phone').hidden = !state.local" in _status.group(0)
            and "$('quit').hidden = !state.local" in _status.group(0))
 
+# 403 を「合言葉が違う＝アプリが再起動した」と決めつけて再読み込みしない。
+# AI の許可が無いだけでも 403 を返していた頃は、案を頼んだ瞬間にページが
+# 読み込み直され、誤った案内（再起動した）が出た。守りの拒否だけを対象にする。
+_api = re.search(r"async function api\(.*?\n}\n", _js, re.S)
+check_true("api の本体を取り出せる", _api)
+check_true("守りの拒否（refused:）のときだけ再読み込みする",
+           _api and "403 && /^refused:/" in _api.group(0))
+
 # 閉じているシートが出てしまわないこと（hidden は display 指定に負ける）
 _css = open(os.path.join(ROOT, "gline", "web", "style.css"), encoding="utf-8").read()
 check_true("hidden 属性を全体で効かせている", "[hidden] { display: none !important; }" in _css)

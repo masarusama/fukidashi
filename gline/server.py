@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import config, imapsync, qr, smtpsend, store
+from . import ai, config, imapsync, qr, smtpsend, store
 
 def _web_dir():
     """画面ファイルの場所。PyInstaller で固めた .exe の中も探す。"""
@@ -506,6 +506,30 @@ def make_handler(cfg, db, runner, control, token, outbox, mobile=None, lan=None)
                                        ensure_ascii=False))
             return True
 
+        def _ai_post(self, path, payload):
+            """AI で返信案。許可・案の作成は LAN 側（スマホ）からも使える。
+            API キーの保存・削除は、パソコンの中からだけ（LAN 側には経路が無い）。"""
+            key = (payload.get("key") or "").strip()
+            try:
+                if path == "/api/ai/consent":
+                    return self._json(ai.set_consent(db, cfg, key, payload.get("value")))
+                if path == "/api/ai/suggest":
+                    return self._json(ai.suggest(
+                        db, cfg, key, payload.get("instruction"), payload.get("previous")))
+                if lan is None and path == "/api/ai/key":
+                    ai.save_key(payload.get("value"))
+                    return self._json(ai.settings(cfg))
+                if lan is None and path == "/api/ai/key/delete":
+                    ai.delete_key()
+                    return self._json(ai.settings(cfg))
+            except ai.ConsentRequired as exc:
+                # 403 は守りの拒否（合言葉・Host・Origin）にだけ使う。画面はそれを
+                # 「アプリが再起動した」と受け取って読み込み直すので、許可の話は別の番号にする。
+                return self._json({"error": str(exc), "consent": False}, 409)
+            except ai.AIError as exc:
+                return self._json({"error": str(exc)}, 400)
+            self._json({"error": "not found"}, 404)
+
         def _mobile_api(self, path):
             """スマホ接続の操作。パソコンの中からだけ（LAN 側には経路が無い）。"""
             try:
@@ -563,6 +587,8 @@ def make_handler(cfg, db, runner, control, token, outbox, mobile=None, lan=None)
             path = urlparse(self.path).path
             if mobile is not None and lan is None and path.startswith("/api/mobile/"):
                 return self._mobile_api(path)
+            if path.startswith("/api/ai/"):
+                return self._ai_post(path, payload)
             if path == "/api/send":
                 key = (payload.get("key") or "").strip()
                 if not key:
@@ -598,6 +624,10 @@ def make_handler(cfg, db, runner, control, token, outbox, mobile=None, lan=None)
                 return self._pair(one("code"))
             if mobile is not None and lan is None and u.path == "/api/mobile":
                 return self._json(mobile.status())
+            if u.path == "/api/ai":
+                return self._json(ai.status(db, cfg, one("key") or ""))
+            if lan is None and u.path == "/api/ai/settings":
+                return self._json(ai.settings(cfg))
 
             if u.path in ("/", "/index.html"):
                 return self._static("index.html")

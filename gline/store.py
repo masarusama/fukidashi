@@ -334,6 +334,21 @@ def classify(cfg, conv_key, mine, bulk_n, promo_n, total, senders=()):
     return "people"
 
 
+def conversation_kind(conn, cfg, conv_key):
+    """1つの会話が「人」か「お知らせ」かを返す。一覧を作らずに判定する。"""
+    row = conn.execute(
+        "SELECT COUNT(*) AS total, SUM(is_me) AS mine, SUM(bulk) AS bulk_n,"
+        " SUM(promo) AS promo_n FROM messages WHERE conv_key=? AND dup=0",
+        (conv_key,)).fetchone()
+    if not row or not row["total"]:
+        return None
+    senders = [r["from_addr"] for r in conn.execute(
+        "SELECT DISTINCT from_addr FROM messages WHERE conv_key=? AND dup=0"
+        " AND is_me=0 AND from_addr <> ''", (conv_key,))]
+    return classify(cfg, conv_key, row["mine"] or 0, row["bulk_n"] or 0,
+                    row["promo_n"] or 0, row["total"], senders)
+
+
 def conversations(conn, cfg, query=None, kind=None, account=None):
     where = ["dup=0"]
     params = []

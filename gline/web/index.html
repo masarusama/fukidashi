@@ -18,6 +18,7 @@
         <span class="me" id="me">…</span>
         <button class="sync" id="sync" title="新着を取り込む">同期</button>
         <button class="sync" id="phone" title="スマホで見る" hidden>スマホ</button>
+        <button class="sync" id="aiSet" title="AI で返信案の設定" hidden>AI</button>
         <button class="sync quit" id="quit" title="Fukidashi を終了する" hidden>終了</button>
       </div>
       <div class="accounts" id="accounts" hidden></div>
@@ -52,6 +53,7 @@
     </div>
     <footer class="compose" id="compose" hidden>
       <div class="compose-head" id="composeHead"></div>
+      <div class="ai-row" id="aiRow" hidden></div>
       <div class="compose-row">
         <textarea id="draft" rows="1" placeholder="返信を書く（Enter で改行）"></textarea>
         <button id="send" class="send-btn" disabled>送信</button>

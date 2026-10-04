@@ -24,6 +24,7 @@ DEFAULTS = {
     "port": 8765,
     "db_path": "data/mail.db",
     "max_fetch_bytes": 5000000,
+    "ai_model": "",
 }
 
 
@@ -86,6 +87,7 @@ class Config:
         self.port = int(data["port"])
         self.db_path = ROOT / data["db_path"]
         self.max_fetch_bytes = int(data["max_fetch_bytes"])
+        self.ai_model = str(data["ai_model"] or "").strip()
         self.mute = [m.strip().lower() for m in data["mute"] if m.strip()]
         self.force_people = [m.strip().lower() for m in data["force_people"] if m.strip()]
         self.force_notices = [m.strip().lower() for m in data["force_notices"] if m.strip()]
