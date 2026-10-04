@@ -389,6 +389,88 @@ httpd.shutdown()
 server.shutdown(httpd)
 check("アプリの終了で LAN 側も閉じる", mobile.enabled, False)
 
+# ---------------------------------------------------------------- 決め打ちのアドレス（Tailscale など）
+
+# 外出先から Tailscale 経由で見るときは、設定の mobile_ip に Tailscale のアドレス
+# （100.x.x.x）を書く。空なら、いまの Wi-Fi のアドレスを自動で選ぶ。
+from gline import config as _config  # noqa: E402
+
+
+def _load(mobile_ip):
+    path = os.path.join(tmp, "cfg_%s.json" % abs(hash(mobile_ip)))
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump({"accounts": [{"email": "me@example.com"}], "mobile_ip": mobile_ip}, fh)
+    return _config.load(path)
+
+
+check("mobile_ip は既定で空（自動）", _load("").mobile_ip, "")
+check("Tailscale のアドレスを書ける", _load("100.101.102.103").mobile_ip, "100.101.102.103")
+check("前後の空白は除く", _load("  192.168.0.5 ").mobile_ip, "192.168.0.5")
+for bad, why in (("abc", "文字列"), ("999.1.1.1", "範囲外"), ("::1", "IPv6"), ("1.2.3", "不完全")):
+    try:
+        _load(bad)
+        check("mobile_ip の不正な値を断る（%s）" % why, "通った", "断る")
+    except _config.ConfigError:
+        check("mobile_ip の不正な値を断る（%s）" % why, "断る", "断る")
+
+
+def jcall(port, method, path, body=None, headers=None):
+    """call の結果の本文を JSON として読む（読めなければそのまま）。"""
+    code, text, _ = call(port, method, path, body, headers)
+    try:
+        return code, json.loads(text)
+    except ValueError:
+        return code, text
+
+
+class _Cfg2(_Cfg):
+    port = free_port()
+    mobile_port = free_port()
+    mobile_ip = "127.0.0.1"
+
+
+cfg2 = _Cfg2(cfg.db_path)
+httpd2 = server.serve(cfg2)
+threading.Thread(target=httpd2.serve_forever, daemon=True).start()
+mobile2 = httpd2.gline_mobile
+mobile2.acceptable = lambda ip: True          # 試験ではループバックで受ける
+time.sleep(0.3)
+
+check("設定したアドレスを、そのまま使う", mobile2.ip_func(), "127.0.0.1")
+check("決め打ちであることを覚えている", mobile2.fixed_ip, "127.0.0.1")
+_, page2, _ = call(cfg2.port, "GET", "/", headers={"Host": "127.0.0.1:%d" % cfg2.port})
+token2 = re.search(r'name="fukidashi-token" content="([^"]+)"', page2).group(1)
+L2 = {"Host": "127.0.0.1:%d" % cfg2.port, server.TOKEN_HEADER: token2}
+
+code, st = jcall(cfg2.port, "GET", "/api/mobile", headers=L2)
+check("開く前から、決め打ちのアドレスが分かる（画面の文言を切り替えるため）",
+      (code, st.get("configured_ip"), st.get("enabled")), (200, "127.0.0.1", False))
+code, st = jcall(cfg2.port, "POST", "/api/mobile/enable", {}, L2)
+check("設定したアドレスで開ける", (code, st.get("host")), (200, "127.0.0.1:%d" % cfg2.mobile_port))
+check("決め打ちなら、アドレスが変わったとは見なさない", st.get("stale"), False)
+code, st = jcall(cfg2.port, "GET", "/api/mobile", headers=L2)
+check("開いたあとも、決め打ちのアドレスが分かる", st.get("configured_ip"), "127.0.0.1")
+call(cfg2.port, "POST", "/api/mobile/disable", {}, L2)
+
+# このパソコンに付いていないアドレスを書いたとき（Tailscale が止まっているなど）
+mobile2.ip_func = lambda: "10.20.30.40"
+mobile2.fixed_ip = "10.20.30.40"
+mobile2.acceptable = server.acceptable_ip
+code, st = jcall(cfg2.port, "POST", "/api/mobile/enable", {}, L2)
+check("付いていないアドレスでは開かない", code, 400)
+check_true("mobile_ip と Tailscale を案内する",
+           "mobile_ip" in st.get("error", "") and "Tailscale" in st.get("error", ""))
+check("開いていない", mobile2.enabled, False)
+
+# 自動のとき（決め打ちでない）は、案内が混ざらない
+mobile2.fixed_ip = ""
+code, st = jcall(cfg2.port, "POST", "/api/mobile/enable", {}, L2)
+check("自動のときは、mobile_ip の案内を出さない（設定していないのに紛らわしい）",
+      "mobile_ip" in st.get("error", ""), False)
+
+httpd2.shutdown()
+server.shutdown(httpd2)
+
 print("%d 件成功 / %d 件失敗" % (len(PASS), len(FAIL)))
 if FAIL:
     print()

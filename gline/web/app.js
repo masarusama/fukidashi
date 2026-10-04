@@ -817,11 +817,13 @@ async function renderPhoneSheet() {
     return;
   }
   if (st.enabled) await renderPhoneOn(body, st);
-  else renderPhoneOff(body);
+  else renderPhoneOff(body, st);
 }
 
-function renderPhoneOff(body) {
-  body.appendChild(elt('p', null, '同じ Wi-Fi にいるスマホで、この画面を開けます。'));
+function renderPhoneOff(body, st) {
+  body.appendChild(elt('p', null, st && st.configured_ip
+    ? `設定したアドレス（${st.configured_ip}）で、スマホからこの画面を開けます。`
+    : '同じ Wi-Fi にいるスマホで、この画面を開けます。'));
   const ul = elt('ul');
   for (const t of [
     '「有効にする」を押したときだけ開きます。Fukidashi を閉じると、自動で止まります。',
@@ -830,10 +832,18 @@ function renderPhoneOff(body) {
     '初回は、パソコンがファイアウォールの許可を求めることがあります。「許可」を選んでください。',
   ]) ul.appendChild(elt('li', null, t));
   body.appendChild(ul);
-  body.appendChild(elt('div', 'warn',
-    '通信は暗号化されません（http）。自宅など、信頼できる Wi-Fi でだけ使ってください。' +
-    'カフェや職場の共有 Wi-Fi では使わないでください。同じ Wi-Fi の人に、メールの中身を' +
-    '見られるおそれがあります。'));
+  if (st && st.configured_ip) {
+    // 設定ファイルでアドレスを決めている。Tailscale のアドレスなら、暗号化された通信路になる
+    body.appendChild(elt('div', 'warn',
+      `待ち受けのアドレスは、設定ファイルの mobile_ip（${st.configured_ip}）です。` +
+      'これが Tailscale のアドレス（100.x.x.x）なら、通信は Tailscale によって暗号化されます。' +
+      'それ以外のアドレスでは、通信は暗号化されません（http）。信頼できる回線でだけ使ってください。'));
+  } else {
+    body.appendChild(elt('div', 'warn',
+      '通信は暗号化されません（http）。自宅など、信頼できる Wi-Fi でだけ使ってください。' +
+      'カフェや職場の共有 Wi-Fi では使わないでください。同じ Wi-Fi の人に、メールの中身を' +
+      '見られるおそれがあります。'));
+  }
   const actions = elt('div', 'sheet-actions');
   const on = elt('button', 'sheet-btn primary', '有効にする');
   on.addEventListener('click', async () => {

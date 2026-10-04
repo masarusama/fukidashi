@@ -4,6 +4,7 @@
 （または環境変数）から、アカウントごとに読み出します。
 """
 
+import ipaddress
 import json
 import os
 import re
@@ -25,6 +26,7 @@ DEFAULTS = {
     "db_path": "data/mail.db",
     "max_fetch_bytes": 5000000,
     "ai_model": "",
+    "mobile_ip": "",
 }
 
 
@@ -88,6 +90,17 @@ class Config:
         self.db_path = ROOT / data["db_path"]
         self.max_fetch_bytes = int(data["max_fetch_bytes"])
         self.ai_model = str(data["ai_model"] or "").strip()
+
+        # スマホ用の待ち受けに使うアドレス。空なら、いまの Wi-Fi のアドレスを自動で選ぶ。
+        # 外出先から Tailscale 経由で見るときは、ここに Tailscale のアドレス（100.x.x.x）を書く。
+        self.mobile_ip = str(data["mobile_ip"] or "").strip()
+        if self.mobile_ip:
+            try:
+                addr = ipaddress.ip_address(self.mobile_ip)
+            except ValueError:
+                raise ConfigError("mobile_ip の形が正しくありません: %r" % self.mobile_ip)
+            if addr.version != 4:
+                raise ConfigError("mobile_ip には IPv4 のアドレスを書いてください: %r" % self.mobile_ip)
         self.mute = [m.strip().lower() for m in data["mute"] if m.strip()]
         self.force_people = [m.strip().lower() for m in data["force_people"] if m.strip()]
         self.force_notices = [m.strip().lower() for m in data["force_notices"] if m.strip()]

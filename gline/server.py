@@ -1,5 +1,6 @@
 """127.0.0.1 だけに待ち受けるローカル HTTP サーバ。"""
 
+import errno
 import hmac
 import ipaddress
 import json
@@ -150,9 +151,10 @@ class Mobile:
     MAX_FAILS = 5
 
     def __init__(self, cfg, factory, ip_func=lan_ip, acceptable=acceptable_ip,
-                 port=None, clock=time.time):
+                 port=None, clock=time.time, fixed_ip=""):
         self.cfg = cfg
         self.factory = factory
+        self.fixed_ip = fixed_ip or ""     # 設定で決め打ちにしたアドレス（Tailscale など）
         self.ip_func = ip_func
         self.acceptable = acceptable
         self.port = port or cfg.port
@@ -182,7 +184,8 @@ class Mobile:
     def status(self):
         with self.lock:
             self._purge()
-            out = {"enabled": self.enabled, "devices": len(self.sessions)}
+            out = {"enabled": self.enabled, "devices": len(self.sessions),
+                   "configured_ip": self.fixed_ip or None}
             if self.enabled:
                 out["host"] = self.host
                 # 回線が変わって IP が替わると、開いた先に届かなくなる
@@ -205,6 +208,11 @@ class Mobile:
             try:
                 httpd = ThreadingHTTPServer((ip, self.port), self.factory(self))
             except OSError as exc:
+                if self.fixed_ip and exc.errno in (errno.EADDRNOTAVAIL, 10049):
+                    raise MobileError(
+                        "設定した mobile_ip（%s）は、いまこのパソコンに付いていないアドレスです。"
+                        "Tailscale を使っているなら、Tailscale が起動していて、接続中か"
+                        "確かめてください。" % ip)
                 raise MobileError("%s:%d を開けませんでした: %s\n"
                                   "ファイアウォールの設定を確かめてください。" % (ip, self.port, exc))
             httpd.daemon_threads = True
@@ -698,7 +706,9 @@ def serve(cfg):
     mobile = Mobile(
         cfg,
         lambda gate: make_handler(cfg, db, runner, control, token, outbox, lan=gate),
-        port=getattr(cfg, "mobile_port", None))
+        port=getattr(cfg, "mobile_port", None),
+        fixed_ip=getattr(cfg, "mobile_ip", ""),
+        ip_func=(lambda: cfg.mobile_ip) if getattr(cfg, "mobile_ip", "") else lan_ip)
     httpd = ThreadingHTTPServer(
         ("127.0.0.1", cfg.port),
         make_handler(cfg, db, runner, control, token, outbox, mobile=mobile))
