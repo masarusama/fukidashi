@@ -12,6 +12,7 @@ Windows 版が起動できなかったのを、利用者が入れるまで気づ
 """
 
 import os
+import re
 import signal
 import socket
 import sys
@@ -175,6 +176,29 @@ r = _run({})                                    # 1つも使えない
 check("1つも無ければ同期しない", synced, [])
 check_true("理由がそのまま出る", r.error and "アプリパスワード" in r.error)
 check("その案内に python3 が含まれない", "python3" in (r.error or ""), False)
+
+# ---------------------------------------------------------------- 画面（JS）の見張り
+
+# 画面の JavaScript は、この Python のテストでは動かせない。代わりに、
+# 実際に起きた不具合の原因になった書き方が戻ってこないかをソースで見張る。
+_js = open(os.path.join(ROOT, "gline", "web", "app.js"), encoding="utf-8").read()
+_run = re.search(r"async function runSync\(.*?\n}\n", _js, re.S)
+check_true("runSync の本体を取り出せる", _run)
+# 同期のたびに会話を開き直すと、入力欄が空になり、読んでいる位置も先頭へ飛ぶ。
+# 自動同期は3分ごとなので、書きかけの返信が3分ごとに消えていた。
+check("同期のあとに会話を開き直さない（書きかけの返信が消える）",
+      "openConversation(" in (_run.group(0) if _run else "openConversation("), False)
+check_true("新着のある会話だけを差し替える処理がある", "refreshActiveStream" in _js)
+
+# スマホからは、終了とスマホ設定のボタンを出さない
+_status = re.search(r"async function refreshStatus\(.*?\n}\n", _js, re.S)
+check_true("パソコンの画面にだけ終了・スマホのボタンを出す",
+           _status and "$('phone').hidden = !state.local" in _status.group(0)
+           and "$('quit').hidden = !state.local" in _status.group(0))
+
+# 閉じているシートが出てしまわないこと（hidden は display 指定に負ける）
+_css = open(os.path.join(ROOT, "gline", "web", "style.css"), encoding="utf-8").read()
+check_true("hidden 属性を全体で効かせている", "[hidden] { display: none !important; }" in _css)
 
 print("%d 件成功 / %d 件失敗" % (len(PASS), len(FAIL)))
 if FAIL:

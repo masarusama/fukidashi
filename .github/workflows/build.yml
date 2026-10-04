@@ -32,6 +32,8 @@ jobs:
           python tests/test_concurrency.py
           python tests/test_http.py
           python tests/test_app.py
+          python tests/test_qr.py
+          python tests/test_mobile.py
 
       - name: .exe を作る
         run: pyinstaller packaging/fukidashi.spec --noconfirm
@@ -70,6 +72,8 @@ jobs:
           python3 tests/test_concurrency.py
           python3 tests/test_http.py
           python3 tests/test_app.py
+          python3 tests/test_qr.py
+          python3 tests/test_mobile.py
 
       - name: .app を作る
         run: python3 make_app.py --zip

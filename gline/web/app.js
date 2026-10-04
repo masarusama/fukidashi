@@ -35,6 +35,7 @@ const state = {
   syncing: false,
   replyCtx: null,     // いまの会話に返信できるか／誰に送るか
   pendingSend: null,  // 取り消し待ちの送信
+  local: false,       // このパソコンの中の画面か（スマホからの画面なら false）
 };
 
 /* ---------------- 共通 ---------------- */
@@ -289,6 +290,10 @@ async function openConversation(key) {
   $('talkSub').textContent = conv
     ? (conv.addrs.join(', ') + `　・　${conv.total} 通`)
     : '';
+  if (isNarrow() && !$('app').classList.contains('show-talk')) {
+    // 履歴に積んでおくと、Android の戻る操作やスワイプで一覧へ戻れる
+    history.pushState({ talk: true }, '');
+  }
   $('app').classList.add('show-talk');
   renderConversations();
 
@@ -659,10 +664,32 @@ async function watchSend(id) {
 
 /* ---------------- 同期 ---------------- */
 
+// 開いている会話のメッセージだけを取り直す。入力中の返信と、読んでいる
+// 位置はそのまま。最新に張り付いていた場合だけ、新着まで送る。
+async function refreshActiveStream() {
+  if (!state.activeKey) return;
+  const stream = $('stream');
+  const nearBottom = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 120;
+  const prevTop = stream.scrollTop;
+  const limit = Math.max(PAGE, state.messages.length + 50);   // 読み込み済みの過去を保つ
+  const acct = state.account ? `&account=${encodeURIComponent(state.account)}` : '';
+  const data = await api(
+    `/api/messages?key=${encodeURIComponent(state.activeKey)}&limit=${limit}${acct}`);
+  state.messages = data.messages;
+  state.oldestTs = state.messages.length ? state.messages[0].ts : null;
+  state.exhausted = state.messages.length < limit;
+  renderStream(false);
+  stream.scrollTop = nearBottom ? stream.scrollHeight : prevTop;
+}
+
 async function refreshStatus() {
   const s = await api('/api/status');
   const known = state.accounts.map((a) => a.email).join(',');
   state.accounts = s.accounts || [];
+  // 終了とスマホ設定は、パソコンの画面にだけ出す（スマホからは操作させない）
+  state.local = !!s.local;
+  $('phone').hidden = !state.local;
+  $('quit').hidden = !state.local;
   if (state.accounts.map((a) => a.email).join(',') !== known) renderAccounts();
   if (state.account && !state.accounts.some((a) => a.email === state.account)) {
     state.account = '';   // 設定から消えたアカウントを選んだままにしない
@@ -712,9 +739,16 @@ async function runSync(silent) {
         break;
       }
     }
+    // 会話を開き直さない。開き直すと書きかけの返信が消え、読んでいる位置も
+    // 先頭へ飛ぶ（自動同期は3分ごとなので、そのたびに起きていた）。
+    // 新しいメールが来た会話だけ、位置を保ったまま差し替える。
     const key = state.activeKey;
+    const before = state.all.find((c) => c.key === key);
     await loadConversations(true);
-    if (key) await openConversation(key);
+    const after = state.all.find((c) => c.key === key);
+    if (key && after && (!before || after.total !== before.total)) {
+      await refreshActiveStream();
+    }
   } catch (e) {
     toast('同期に失敗しました: ' + e.message, 12000);
   } finally {
@@ -723,6 +757,133 @@ async function runSync(silent) {
     $('sync').textContent = '同期';
   }
 }
+
+/* ---------------- スマホで見る ---------------- */
+
+function isNarrow() { return window.matchMedia('(max-width: 760px)').matches; }
+
+function elt(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+
+const postJson = (path) => api(path, {
+  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+});
+
+let phoneTimer = null;
+
+function closePhoneSheet() {
+  $('sheet').hidden = true;
+  clearInterval(phoneTimer);
+  phoneTimer = null;
+}
+
+async function openPhoneSheet() {
+  $('sheet').hidden = false;
+  await renderPhoneSheet();
+  clearInterval(phoneTimer);
+  // 読み取った端末の数を追う（QR は作り直さない）
+  phoneTimer = setInterval(async () => {
+    try {
+      const st = await api('/api/mobile');
+      const n = document.getElementById('phoneDevices');
+      if (n && st.enabled) n.textContent = `接続中のスマホ: ${st.devices} 台`;
+    } catch (e) { /* 閉じる途中など */ }
+  }, 3000);
+}
+
+async function renderPhoneSheet() {
+  const body = $('sheetBody');
+  body.textContent = '';
+  let st;
+  try {
+    st = await api('/api/mobile');
+  } catch (e) {
+    body.appendChild(elt('p', null, '状態を取得できませんでした: ' + e.message));
+    return;
+  }
+  if (st.enabled) await renderPhoneOn(body, st);
+  else renderPhoneOff(body);
+}
+
+function renderPhoneOff(body) {
+  body.appendChild(elt('p', null, '同じ Wi-Fi にいるスマホで、この画面を開けます。'));
+  const ul = elt('ul');
+  for (const t of [
+    '「有効にする」を押したときだけ開きます。Fukidashi を閉じると、自動で止まります。',
+    '表示される QR コードを読み取ったスマホだけが入れます。QR コードは1回しか使えず、5分で切れます。',
+    'パソコンが起きていて、スマホが同じ Wi-Fi にいるときだけ見られます。',
+    '初回は、パソコンがファイアウォールの許可を求めることがあります。「許可」を選んでください。',
+  ]) ul.appendChild(elt('li', null, t));
+  body.appendChild(ul);
+  body.appendChild(elt('div', 'warn',
+    '通信は暗号化されません（http）。自宅など、信頼できる Wi-Fi でだけ使ってください。' +
+    'カフェや職場の共有 Wi-Fi では使わないでください。同じ Wi-Fi の人に、メールの中身を' +
+    '見られるおそれがあります。'));
+  const actions = elt('div', 'sheet-actions');
+  const on = elt('button', 'sheet-btn primary', '有効にする');
+  on.addEventListener('click', async () => {
+    on.disabled = true;
+    try {
+      await postJson('/api/mobile/enable');
+      await renderPhoneSheet();
+    } catch (e) {
+      toast('開けませんでした: ' + e.message, 12000);
+      on.disabled = false;
+    }
+  });
+  actions.appendChild(on);
+  body.appendChild(actions);
+}
+
+async function renderPhoneOn(body, st) {
+  let pair;
+  try {
+    pair = await postJson('/api/mobile/pair');   // 開くたびに、新しい合言葉を作る
+  } catch (e) {
+    body.appendChild(elt('p', null, 'QR コードを作れませんでした: ' + e.message));
+    return;
+  }
+  if (st.stale) {
+    body.appendChild(elt('div', 'warn',
+      'このパソコンの IP アドレスが変わりました。いったん「無効にする」を押して、' +
+      'もう一度「有効にする」を押してください。'));
+  }
+  body.appendChild(elt('p', null, 'スマホのカメラで、この QR コードを読み取ってください。'));
+  const img = elt('img', 'sheet-qr');
+  img.alt = 'スマホで読み取る QR コード';
+  img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(pair.svg);
+  body.appendChild(img);
+  body.appendChild(elt('div', 'sheet-url', pair.url));
+  body.appendChild(elt('p', 'sheet-meta',
+    `この QR コードは1回だけ、${Math.floor(pair.expires_in / 60)}分以内に使えます。`));
+  const devices = elt('p', 'sheet-meta', `接続中のスマホ: ${st.devices} 台`);
+  devices.id = 'phoneDevices';
+  body.appendChild(devices);
+
+  const actions = elt('div', 'sheet-actions');
+  const again = elt('button', 'sheet-btn', '新しい QR コードを出す');
+  again.addEventListener('click', () => renderPhoneSheet());
+  const off = elt('button', 'sheet-btn danger', '無効にする');
+  off.addEventListener('click', async () => {
+    if (!confirm('スマホからの接続をすべて切って、待ち受けを閉じます。')) return;
+    try {
+      await postJson('/api/mobile/disable');
+      await renderPhoneSheet();
+    } catch (e) {
+      toast('閉じられませんでした: ' + e.message, 12000);
+    }
+  });
+  actions.append(again, off);
+  body.appendChild(actions);
+}
+
+$('phone').addEventListener('click', () => openPhoneSheet().catch((e) => toast(e.message)));
+$('sheetClose').addEventListener('click', closePhoneSheet);
+$('sheet').addEventListener('click', (e) => { if (e.target === $('sheet')) closePhoneSheet(); });
 
 /* ---------------- 起動 ---------------- */
 
@@ -773,12 +934,17 @@ $('quit').addEventListener('click', async () => {
   screen.appendChild(box);
   document.body.appendChild(screen);
 });
-$('back').addEventListener('click', () => $('app').classList.remove('show-talk'));
+$('back').addEventListener('click', () => {
+  if (history.state && history.state.talk) history.back();
+  else $('app').classList.remove('show-talk');
+});
+window.addEventListener('popstate', () => $('app').classList.remove('show-talk'));
 
 document.addEventListener('keydown', (e) => {
   const typing = /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName);
   if (e.key === '/' && !typing) { e.preventDefault(); $('search').focus(); return; }
   if (e.key === 'Escape') {
+    if (!$('sheet').hidden) { closePhoneSheet(); return; }
     if (typing) document.activeElement.blur();
     else $('app').classList.remove('show-talk');
     return;

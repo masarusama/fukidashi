@@ -2,9 +2,11 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="fukidashi-token" content="__FUKIDASHI_TOKEN__">
 <title>Fukidashi</title>
+<link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -15,7 +17,8 @@
       <div class="side-title">
         <span class="me" id="me">…</span>
         <button class="sync" id="sync" title="新着を取り込む">同期</button>
-        <button class="sync quit" id="quit" title="Fukidashi を終了する">終了</button>
+        <button class="sync" id="phone" title="スマホで見る" hidden>スマホ</button>
+        <button class="sync quit" id="quit" title="Fukidashi を終了する" hidden>終了</button>
       </div>
       <div class="accounts" id="accounts" hidden></div>
       <div class="tabs" id="tabs" role="tablist">
@@ -56,6 +59,16 @@
     </footer>
   </main>
 
+</div>
+
+<div class="sheet-backdrop" id="sheet" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <div class="sheet-head">
+      <h2 id="sheetTitle">スマホで見る</h2>
+      <button class="sheet-x" id="sheetClose" aria-label="閉じる">×</button>
+    </div>
+    <div class="sheet-body" id="sheetBody"></div>
+  </div>
 </div>
 
 <div class="toast" id="toast" hidden></div>

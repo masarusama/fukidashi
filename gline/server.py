@@ -1,17 +1,22 @@
 """127.0.0.1 だけに待ち受けるローカル HTTP サーバ。"""
 
+import hmac
+import ipaddress
 import json
 import mimetypes
 import secrets as _secrets
+import socket
 import sys
 import threading
 import time
 import traceback
+from html import escape
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import config, imapsync, smtpsend, store
+from . import config, imapsync, qr, smtpsend, store
 
 def _web_dir():
     """画面ファイルの場所。PyInstaller で固めた .exe の中も探す。"""
@@ -65,6 +70,211 @@ def check_request(port, token, path, host, origin, sent_token):
     if path.startswith("/api/") and sent_token != token:
         return "token"
     return None
+
+
+SESSION_COOKIE = "fk_session"
+
+# 鍵を持たない端末にも見せてよいファイル。アイコンだけで、秘密は含まない。
+PUBLIC_STATIC = frozenset({"/static/icon-192.png", "/static/apple-touch-icon.png"})
+
+
+def lan_ip():
+    """この機械が外へ出るときに使う IP アドレス。
+
+    UDP の connect は相手を決めるだけで、実際には何も送らない。
+    """
+    for target in ("10.255.255.255", "8.8.8.8"):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.connect((target, 1))
+            return sock.getsockname()[0]
+        except OSError:
+            continue
+        finally:
+            sock.close()
+    return None
+
+
+def acceptable_ip(ip):
+    """家庭や職場の内側のアドレスだけを許す。
+
+    インターネットから直接届くアドレス（グローバル IP）に待ち受けを開くと、
+    世界中から見えてしまう。ループバックや未指定も、スマホからは使えない。
+    """
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return not (addr.is_global or addr.is_loopback
+                or addr.is_unspecified or addr.is_multicast)
+
+
+def check_lan_request(expected_host, token, path, host, origin, sent_token, paired):
+    """LAN 側で、要求を受けてよいか判断する。断る理由を返す（問題なければ None）。
+
+    LAN 側は同じネットワークの誰からでも届くので、手前の守りより厳しくする。
+
+      1. Host が待ち受けのアドレスそのものであること。別の名前で来た要求
+         （DNS リバインディング）は断る。
+      2. Origin があれば、自分自身であること。
+      3. ペアリング済みの端末（鍵の Cookie を持つ端末）だけを通す。
+         鍵が無ければ画面も合言葉も渡さない。
+      4. /api/ には、さらに合言葉の独自ヘッダを要る。
+    """
+    if host is None or host.strip().lower() != expected_host:
+        return "host"
+    if origin is not None and origin.strip() != "http://" + expected_host:
+        return "origin"
+    if path == "/pair" or path in PUBLIC_STATIC:
+        return None
+    if not paired:
+        return "unpaired"
+    if path.startswith("/api/") and sent_token != token:
+        return "token"
+    return None
+
+
+class MobileError(Exception):
+    pass
+
+
+class Mobile:
+    """スマホから見るための、LAN 側の待ち受けとペアリングを預かる。
+
+    押したときだけ開き、押さなければ何も待ち受けない。アプリを閉じると
+    自動で止まり、ペアリングも消える（保存しない）。
+    """
+
+    SESSION_SECONDS = 7 * 24 * 3600
+    CODE_SECONDS = 300
+    MAX_FAILS = 5
+
+    def __init__(self, cfg, factory, ip_func=lan_ip, acceptable=acceptable_ip,
+                 port=None, clock=time.time):
+        self.cfg = cfg
+        self.factory = factory
+        self.ip_func = ip_func
+        self.acceptable = acceptable
+        self.port = port or cfg.port
+        self.clock = clock
+        self.lock = threading.RLock()
+        self.httpd = None
+        self.ip = None
+        self.codes = {}
+        self.sessions = {}
+        self.fails = 0
+
+    # -- 状態 -------------------------------------------------------------
+    @property
+    def enabled(self):
+        return self.httpd is not None
+
+    @property
+    def host(self):
+        return "%s:%d" % (self.ip, self.port)
+
+    def _purge(self):
+        now = self.clock()
+        for table in (self.codes, self.sessions):
+            for key in [k for k, exp in table.items() if exp < now]:
+                del table[key]
+
+    def status(self):
+        with self.lock:
+            self._purge()
+            out = {"enabled": self.enabled, "devices": len(self.sessions)}
+            if self.enabled:
+                out["host"] = self.host
+                # 回線が変わって IP が替わると、開いた先に届かなくなる
+                out["stale"] = bool(self.ip_func() not in (None, self.ip))
+            return out
+
+    # -- 開く・閉じる ------------------------------------------------------
+    def enable(self):
+        with self.lock:
+            if self.enabled:
+                return
+            ip = self.ip_func()
+            if not ip:
+                raise MobileError("ネットワークに繋がっていないようです。Wi-Fi に繋いでから、"
+                                  "もう一度お試しください。")
+            if not self.acceptable(ip):
+                raise MobileError(
+                    "この接続（%s）は、インターネットから直接見える可能性があるため、"
+                    "スマホ用の待ち受けは開きません。家庭や職場の Wi-Fi に繋いでください。" % ip)
+            try:
+                httpd = ThreadingHTTPServer((ip, self.port), self.factory(self))
+            except OSError as exc:
+                raise MobileError("%s:%d を開けませんでした: %s\n"
+                                  "ファイアウォールの設定を確かめてください。" % (ip, self.port, exc))
+            httpd.daemon_threads = True
+            threading.Thread(target=httpd.serve_forever, daemon=True).start()
+            self.httpd, self.ip, self.fails = httpd, ip, 0
+
+    def disable(self):
+        with self.lock:
+            httpd, self.httpd = self.httpd, None
+            self.codes.clear()
+            self.sessions.clear()
+        if httpd is not None:
+            httpd.shutdown()
+            httpd.server_close()
+
+    # -- ペアリング --------------------------------------------------------
+    def new_pairing(self):
+        """QR コードに入れる、1回きり・短時間の合言葉を作る。"""
+        with self.lock:
+            if not self.enabled:
+                raise MobileError("スマホ用の待ち受けが開いていません。")
+            self._purge()
+            code = _secrets.token_urlsafe(9)
+            self.codes = {code: self.clock() + self.CODE_SECONDS}   # 前のものは捨てる
+            self.fails = 0
+            return {"url": "http://%s/pair?code=%s" % (self.host, code),
+                    "expires_in": self.CODE_SECONDS}
+
+    def redeem(self, code):
+        """合言葉を鍵に引き換える。使えない場合は None。
+
+        間違いが続いたら、有効な合言葉を全部捨てる。パソコンで新しく
+        出し直すまで、総当たりは続けられない。
+        """
+        probe = (code or "").encode("utf-8")
+        with self.lock:
+            self._purge()
+            hit = None
+            for candidate in self.codes:
+                if hmac.compare_digest(candidate.encode("utf-8"), probe):
+                    hit = candidate
+            if hit is None:
+                self.fails += 1
+                if self.fails >= self.MAX_FAILS:
+                    self.codes.clear()
+                return None
+            del self.codes[hit]                      # 1回しか使えない
+            sid = _secrets.token_urlsafe(32)
+            self.sessions[sid] = self.clock() + self.SESSION_SECONDS
+            return sid
+
+    def valid_session(self, sid):
+        if not sid:
+            return False
+        with self.lock:
+            self._purge()
+            return sid in self.sessions
+
+
+def _notice_page(title, lines):
+    """スマホに見せる、飾りの少ないお知らせの画面。"""
+    body = "".join("<p>%s</p>" % escape(l) for l in lines)
+    return ("<!DOCTYPE html><html lang=\"ja\"><head><meta charset=\"utf-8\">"
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+            "<title>Fukidashi</title><style>"
+            ":root{color-scheme:light dark}"
+            "body{font:16px/1.7 -apple-system,BlinkMacSystemFont,'Hiragino Sans',sans-serif;"
+            "max-width:28em;margin:12vh auto;padding:0 20px}"
+            "h1{font-size:19px}</style></head><body><h1>%s</h1>%s</body></html>"
+            % (escape(title), body))
 
 
 class SyncRunner:
@@ -209,7 +419,9 @@ class Outbox:
             return {"id": ident, "state": item["state"], "error": item["error"]}
 
 
-def make_handler(cfg, db, runner, control, token, outbox):
+def make_handler(cfg, db, runner, control, token, outbox, mobile=None, lan=None):
+    # lan が None なら、このパソコンの中だけの待ち受け。
+    # lan（= Mobile）が渡されたら、同じネットワーク向けで、守りが厳しくなる。
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "gmail_line"
@@ -235,17 +447,81 @@ def make_handler(cfg, db, runner, control, token, outbox):
         def _json(self, obj, code=200):
             self._send(code, json.dumps(obj, ensure_ascii=False), )
 
+        def _session_id(self):
+            raw = self.headers.get("Cookie")
+            if not raw:
+                return None
+            try:
+                jar = SimpleCookie()
+                jar.load(raw)
+                morsel = jar.get(SESSION_COOKIE)
+                return morsel.value if morsel else None
+            except Exception:
+                return None
+
+        def _unpaired(self, path):
+            if path.startswith("/api/"):
+                return self._json({"error": "unpaired"}, 401)
+            self._send(401, _notice_page(
+                "このスマホは、まだ接続されていません",
+                ["パソコンの Fukidashi で「スマホ」ボタンを押し、表示された QR コードを、"
+                 "このスマホのカメラで読み取ってください。"]),
+                "text/html; charset=utf-8")
+
+        def _pair(self, code):
+            sid = lan.redeem(code)
+            if sid is None:
+                return self._send(403, _notice_page(
+                    "この QR コードは使えません",
+                    ["期限（5分）が切れたか、すでに使われています。",
+                     "パソコンの Fukidashi で、新しい QR コードを出してください。"]),
+                    "text/html; charset=utf-8")
+            self.send_response(302)
+            self.send_header("Location", "/")
+            self.send_header("Set-Cookie",
+                             "%s=%s; HttpOnly; SameSite=Strict; Path=/; Max-Age=%d"
+                             % (SESSION_COOKIE, sid, Mobile.SESSION_SECONDS))
+            self.send_header("Content-Length", "0")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.end_headers()
+
         def _guard(self):
-            """通してよい要求か確かめる。駄目なら 403 を返して True。"""
-            reason = check_request(
-                cfg.port, token, urlparse(self.path).path,
-                self.headers.get("Host"), self.headers.get("Origin"),
-                self.headers.get(TOKEN_HEADER))
+            """通してよい要求か確かめる。駄目なら理由を返して True。"""
+            path = urlparse(self.path).path
+            host, origin = self.headers.get("Host"), self.headers.get("Origin")
+            sent = self.headers.get(TOKEN_HEADER)
+            if lan is None:
+                reason = check_request(cfg.port, token, path, host, origin, sent)
+            else:
+                reason = check_lan_request(
+                    lan.host, token, path, host, origin, sent,
+                    lan.valid_session(self._session_id()))
             if reason is None:
                 return False
+            if reason == "unpaired":
+                self._unpaired(path)
+                return True
             self._send(403, json.dumps({"error": "refused:" + reason},
                                        ensure_ascii=False))
             return True
+
+        def _mobile_api(self, path):
+            """スマホ接続の操作。パソコンの中からだけ（LAN 側には経路が無い）。"""
+            try:
+                if path == "/api/mobile/enable":
+                    mobile.enable()
+                    return self._json(mobile.status())
+                if path == "/api/mobile/disable":
+                    mobile.disable()
+                    return self._json(mobile.status())
+                if path == "/api/mobile/pair":
+                    info = mobile.new_pairing()
+                    info["svg"] = qr.to_svg(qr.make_matrix(info["url"]))
+                    return self._json(info)
+            except (MobileError, qr.QRError) as exc:
+                return self._json({"error": str(exc)}, 400)
+            self._json({"error": "not found"}, 404)
 
         def _static(self, name):
             path = (WEB / name).resolve()
@@ -285,6 +561,8 @@ def make_handler(cfg, db, runner, control, token, outbox):
                 return self._json({"error": "本文を読めませんでした"}, 400)
 
             path = urlparse(self.path).path
+            if mobile is not None and lan is None and path.startswith("/api/mobile/"):
+                return self._mobile_api(path)
             if path == "/api/send":
                 key = (payload.get("key") or "").strip()
                 if not key:
@@ -300,6 +578,9 @@ def make_handler(cfg, db, runner, control, token, outbox):
                 started = runner.start()
                 return self._json({"started": started, **runner.state()})
             if path == "/api/quit":
+                if lan is not None:
+                    # スマホからこのパソコンのアプリを止めさせない
+                    return self._json({"error": "not found"}, 404)
                 self._json({"quitting": True})
                 httpd = control.get("httpd")
                 if httpd is not None:
@@ -313,6 +594,11 @@ def make_handler(cfg, db, runner, control, token, outbox):
             q = parse_qs(u.query)
             one = lambda k, d=None: (q.get(k) or [d])[0]
 
+            if lan is not None and u.path == "/pair":
+                return self._pair(one("code"))
+            if mobile is not None and lan is None and u.path == "/api/mobile":
+                return self._json(mobile.status())
+
             if u.path in ("/", "/index.html"):
                 return self._static("index.html")
             if u.path.startswith("/static/"):
@@ -320,6 +606,7 @@ def make_handler(cfg, db, runner, control, token, outbox):
 
             if u.path == "/api/status":
                 return self._json({
+                    "local": lan is None,
                     "accounts": [{"email": a.email, "label": a.label}
                                  for a in cfg.accounts],
                     "stats": store.stats(db, cfg),
@@ -378,12 +665,17 @@ def serve(cfg):
         threading.Timer(6.0, runner.start).start()
 
     outbox = Outbox(cfg, db, on_sent=after_sent)
+    mobile = Mobile(
+        cfg,
+        lambda gate: make_handler(cfg, db, runner, control, token, outbox, lan=gate),
+        port=getattr(cfg, "mobile_port", None))
     httpd = ThreadingHTTPServer(
         ("127.0.0.1", cfg.port),
-        make_handler(cfg, db, runner, control, token, outbox))
+        make_handler(cfg, db, runner, control, token, outbox, mobile=mobile))
     httpd.daemon_threads = True
     control["httpd"] = httpd
     httpd.gline_db = db
+    httpd.gline_mobile = mobile
     return httpd
 
 
@@ -393,6 +685,12 @@ def shutdown(httpd):
     書き込み途中で落とされると SQLite が中途半端な状態で残り、次の起動で
     「database disk image is malformed」になることがある。終了経路は必ずここを通す。
     """
+    mobile = getattr(httpd, "gline_mobile", None)
+    if mobile is not None:
+        try:
+            mobile.disable()          # スマホ用の待ち受けも必ず閉じる
+        except Exception:
+            pass
     try:
         httpd.server_close()
     except Exception:

@@ -48,7 +48,7 @@ html, body {
   -webkit-font-smoothing: antialiased;
 }
 
-.app { display: flex; height: 100vh; overflow: hidden; }
+.app { display: flex; height: 100vh; height: 100dvh; overflow: hidden; }
 
 /* ---------------- 左: 会話一覧 ---------------- */
 
@@ -343,6 +343,55 @@ html, body {
   color: var(--unread); cursor: pointer;
 }
 
+/* ---------------- スマホ接続のシート ---------------- */
+
+.sheet-backdrop {
+  position: fixed; inset: 0; z-index: 60;
+  background: rgba(0,0,0,.45);
+  display: grid; place-items: center; padding: 16px;
+}
+.sheet {
+  width: min(440px, 100%); max-height: 92dvh; overflow-y: auto;
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); border-radius: 18px;
+  box-shadow: 0 12px 40px rgba(0,0,0,.35);
+}
+.sheet-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 18px 6px;
+}
+.sheet-head h2 { margin: 0; font-size: 17px; }
+.sheet-x {
+  font: inherit; font-size: 22px; line-height: 1; color: var(--text-dim);
+  background: none; border: none; cursor: pointer; padding: 4px 8px;
+}
+.sheet-body { padding: 8px 18px 18px; font-size: 14px; line-height: 1.7; }
+.sheet-body p { margin: 0 0 10px; }
+.sheet-body ul { margin: 0 0 14px; padding-left: 1.2em; color: var(--text-dim); }
+.sheet-body li { margin-bottom: 4px; }
+.sheet-body .warn {
+  border: 1px solid var(--unread); border-radius: 12px;
+  padding: 10px 12px; margin: 0 0 14px; color: var(--text);
+  background: color-mix(in srgb, var(--unread) 8%, transparent);
+}
+.sheet-qr {
+  display: block; width: min(260px, 70vw); aspect-ratio: 1;
+  margin: 4px auto 10px; border-radius: 12px; background: #fff;
+}
+.sheet-url {
+  text-align: center; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-faint); word-break: break-all; margin-bottom: 10px;
+}
+.sheet-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.sheet-btn {
+  flex: 1; min-width: 8em; font: inherit; font-size: 13px; font-weight: 700;
+  padding: 10px 14px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+}
+.sheet-btn.primary { background: var(--accent); border-color: transparent; color: #fff; }
+.sheet-btn.danger { color: var(--unread); border-color: var(--unread); background: none; }
+.sheet-meta { text-align: center; color: var(--text-dim); font-size: 12.5px; }
+
 /* ---------------- toast ---------------- */
 
 .stopped {
@@ -370,6 +419,26 @@ html, body {
   .app.show-talk .sidebar { display: none; }
   .app.show-talk .talk { display: flex; }
   .back { display: block; }
-  .stream { padding: 14px 14px 32px; }
+  .stream { padding: 14px 14px 32px; overscroll-behavior: contain; }
   .bubble-wrap { max-width: 82%; }
+
+  /* iOS は 16px 未満の入力欄に触れると画面を勝手に拡大する */
+  .compose textarea, .searchbox input { font-size: 16px; }
+  .send-btn { padding: 11px 20px; }
+  .sync { padding: 8px 14px; }
+  .tab { padding: 9px 4px; }
+  .conv { padding: 12px 14px; }
+  .back { padding: 6px 12px 6px 4px; font-size: 26px; }
+
+  /* ノッチやホームバーに隠れないように */
+  .side-head { padding-top: calc(14px + env(safe-area-inset-top)); }
+  .talk-head { padding-top: calc(10px + env(safe-area-inset-top)); }
+  .compose   { padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
 }
+
+/* hidden 属性は、display を指定した要素には効かない（作者の CSS が勝つ）。
+   シートや空のアカウント欄が、閉じているのに出てしまうのを防ぐ。 */
+[hidden] { display: none !important; }
+
+html { -webkit-text-size-adjust: 100%; }
+button, .conv, .tab { -webkit-tap-highlight-color: transparent; }
