@@ -820,22 +820,57 @@ async function renderPhoneSheet() {
   else renderPhoneOff(body, st);
 }
 
+async function copyText(text, what) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(what + 'をコピーしました。', 3000);
+  } catch (e) {
+    toast('コピーできませんでした。表示されている文字を、直接選んでコピーしてください。', 7000);
+  }
+}
+
+// 見出し・アドレス・コピーボタンを、1かたまりで並べる
+function addressBlock(body, caption, text) {
+  body.appendChild(elt('p', 'sheet-meta', caption));
+  body.appendChild(elt('div', 'sheet-url', text));
+  const row = elt('div', 'sheet-actions');
+  const copy = elt('button', 'sheet-btn', 'コピー');
+  copy.addEventListener('click', () => copyText(text, caption));
+  row.appendChild(copy);
+  body.appendChild(row);
+}
+
 function renderPhoneOff(body, st) {
-  body.appendChild(elt('p', null, st && st.configured_ip
-    ? `設定したアドレス（${st.configured_ip}）で、スマホからこの画面を開けます。`
+  const fixed = st && st.configured_ip;
+  body.appendChild(elt('p', null, fixed
+    ? `設定したアドレス（${fixed}）で、スマホからこの画面を開けます。`
     : '同じ Wi-Fi にいるスマホで、この画面を開けます。'));
+
+  if (st && st.always_on) {
+    body.appendChild(elt('p', 'sheet-meta', st.paused
+      ? '常時オンの設定ですが、いまは一時停止中です。'
+      : '常時オンの設定です。まだ開けていません。開けるまで、自動で試し続けます。'));
+    if (st.last_error) {
+      body.appendChild(elt('div', 'warn', '開けない理由: ' + st.last_error));
+    }
+  }
+
   const ul = elt('ul');
   for (const t of [
-    '「有効にする」を押したときだけ開きます。Fukidashi を閉じると、自動で止まります。',
     '表示される QR コードを読み取ったスマホだけが入れます。QR コードは1回しか使えず、5分で切れます。',
-    'パソコンが起きていて、スマホが同じ Wi-Fi にいるときだけ見られます。',
+    'パソコンが起きていて、スマホが同じ Wi-Fi（または Tailscale）にいるときだけ見られます。',
     '初回は、パソコンがファイアウォールの許可を求めることがあります。「許可」を選んでください。',
   ]) ul.appendChild(elt('li', null, t));
+  ul.insertBefore(elt('li', null, st && st.always_on
+    ? '「有効にする」を押すと、待ち受けを再開します。'
+    : '「有効にする」を押したときだけ開きます。Fukidashi を閉じると、自動で止まります。'),
+    ul.firstChild);
   body.appendChild(ul);
-  if (st && st.configured_ip) {
+
+  if (fixed) {
     // 設定ファイルでアドレスを決めている。Tailscale のアドレスなら、暗号化された通信路になる
     body.appendChild(elt('div', 'warn',
-      `待ち受けのアドレスは、設定ファイルの mobile_ip（${st.configured_ip}）です。` +
+      `待ち受けのアドレスは、設定ファイルの mobile_ip（${fixed}）です。` +
       'これが Tailscale のアドレス（100.x.x.x）なら、通信は Tailscale によって暗号化されます。' +
       'それ以外のアドレスでは、通信は暗号化されません（http）。信頼できる回線でだけ使ってください。'));
   } else {
@@ -845,7 +880,7 @@ function renderPhoneOff(body, st) {
       '見られるおそれがあります。'));
   }
   const actions = elt('div', 'sheet-actions');
-  const on = elt('button', 'sheet-btn primary', '有効にする');
+  const on = elt('button', 'sheet-btn primary', st && st.always_on ? '再開する' : '有効にする');
   on.addEventListener('click', async () => {
     on.disabled = true;
     try {
@@ -858,6 +893,34 @@ function renderPhoneOff(body, st) {
   });
   actions.appendChild(on);
   body.appendChild(actions);
+}
+
+function renderDevices(body, st) {
+  if (!st.remember) {
+    body.appendChild(elt('p', 'sheet-meta', `接続中のスマホ: ${st.devices} 台`));
+    body.lastChild.id = 'phoneDevices';
+    return;
+  }
+  const head = elt('p', 'sheet-meta', `ペアリング済みのスマホ: ${st.devices} 台`);
+  head.id = 'phoneDevices';
+  body.appendChild(head);
+  for (const d of st.devices_list || []) {
+    const row = elt('div', 'sheet-actions');
+    const when = new Date(d.created * 1000).toLocaleDateString('ja-JP');
+    row.appendChild(elt('span', 'sheet-meta', `${d.label}（${when} にペアリング）`));
+    const cut = elt('button', 'ai-link', '切る');
+    cut.addEventListener('click', async () => {
+      if (!confirm(`${d.label}（${when} にペアリング）の接続を切ります。`)) return;
+      try {
+        await postBody('/api/mobile/revoke', { id: d.id });
+        await renderPhoneSheet();
+      } catch (e) {
+        toast('切れませんでした: ' + e.message, 10000);
+      }
+    });
+    row.appendChild(cut);
+    body.appendChild(row);
+  }
 }
 
 async function renderPhoneOn(body, st) {
@@ -873,24 +936,36 @@ async function renderPhoneOn(body, st) {
       'このパソコンの IP アドレスが変わりました。いったん「無効にする」を押して、' +
       'もう一度「有効にする」を押してください。'));
   }
-  body.appendChild(elt('p', null, 'スマホのカメラで、この QR コードを読み取ってください。'));
+
+  body.appendChild(elt('p', null, 'はじめてのスマホは、カメラで、この QR コードを読み取ってください。'));
   const img = elt('img', 'sheet-qr');
   img.alt = 'スマホで読み取る QR コード';
   img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(pair.svg);
   body.appendChild(img);
-  body.appendChild(elt('div', 'sheet-url', pair.url));
   body.appendChild(elt('p', 'sheet-meta',
     `この QR コードは1回だけ、${Math.floor(pair.expires_in / 60)}分以内に使えます。`));
-  const devices = elt('p', 'sheet-meta', `接続中のスマホ: ${st.devices} 台`);
-  devices.id = 'phoneDevices';
-  body.appendChild(devices);
+
+  // カメラが使えない場合のために、同じものを文字でも出す
+  addressBlock(body, '初めて開くときのアドレス（1回きり）', pair.url);
+
+  if (st.base_url) {
+    addressBlock(body, 'ブックマーク用のアドレス', st.base_url);
+    body.appendChild(elt('p', 'sheet-meta', st.remember
+      ? 'ペアリングしたスマホは、このアドレスをブックマークすれば、QR なしで開けます（最長90日）。'
+      : 'いまの設定では、Fukidashi を閉じると、ペアリングが消えます。ブックマークを使い続けるには、' +
+        '設定に mobile_ip と mobile_always_on を書いてください。'));
+  }
+
+  renderDevices(body, st);
 
   const actions = elt('div', 'sheet-actions');
   const again = elt('button', 'sheet-btn', '新しい QR コードを出す');
   again.addEventListener('click', () => renderPhoneSheet());
-  const off = elt('button', 'sheet-btn danger', '無効にする');
+  const off = elt('button', 'sheet-btn danger', st.always_on ? '一時停止' : '無効にする');
   off.addEventListener('click', async () => {
-    if (!confirm('スマホからの接続をすべて切って、待ち受けを閉じます。')) return;
+    if (!confirm(st.remember
+      ? '待ち受けを止めます（ペアリングは残ります）。「再開する」で、また開けます。'
+      : 'スマホからの接続をすべて切って、待ち受けを閉じます。')) return;
     try {
       await postJson('/api/mobile/disable');
       await renderPhoneSheet();
@@ -900,6 +975,22 @@ async function renderPhoneOn(body, st) {
   });
   actions.append(again, off);
   body.appendChild(actions);
+
+  if (st.remember && st.devices > 0) {
+    const all = elt('div', 'sheet-actions');
+    const cutAll = elt('button', 'sheet-btn danger', 'すべての接続を切る');
+    cutAll.addEventListener('click', async () => {
+      if (!confirm('ペアリングしたスマホを、すべて切ります。もう一度使うには、QR コードの読み取りが要ります。')) return;
+      try {
+        await postJson('/api/mobile/revoke_all');
+        await renderPhoneSheet();
+      } catch (e) {
+        toast('切れませんでした: ' + e.message, 10000);
+      }
+    });
+    all.appendChild(cutAll);
+    body.appendChild(all);
+  }
 }
 
 $('phone').addEventListener('click', () => openPhoneSheet().catch((e) => toast(e.message)));

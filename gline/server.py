@@ -1,10 +1,12 @@
 """127.0.0.1 だけに待ち受けるローカル HTTP サーバ。"""
 
 import errno
+import hashlib
 import hmac
 import ipaddress
 import json
 import mimetypes
+import re
 import secrets as _secrets
 import socket
 import sys
@@ -139,19 +141,39 @@ class MobileError(Exception):
     pass
 
 
+def device_label(user_agent):
+    """端末の種類を、一覧に出す短い名前にする。見分けのための目安でしかない。"""
+    ua = user_agent or ""
+    for key, label in (("iPhone", "iPhone"), ("iPad", "iPad"), ("Android", "Android"),
+                       ("Windows", "Windows"), ("Macintosh", "Mac"), ("Linux", "Linux")):
+        if key in ua:
+            return label
+    return "ブラウザ"
+
+
 class Mobile:
     """スマホから見るための、LAN 側の待ち受けとペアリングを預かる。
 
-    押したときだけ開き、押さなければ何も待ち受けない。アプリを閉じると
+    既定では、押したときだけ開き、押さなければ何も待ち受けない。アプリを閉じると
     自動で止まり、ペアリングも消える（保存しない）。
+
+    常時オン（設定の mobile_always_on）のときだけ、次のように変わる。
+      * 起動のたびに、自動で待ち受けを開く（開けなければ、静かに再試行し続ける）
+      * ペアリングした端末を REMEMBER_SECONDS（90日）覚える。再起動しても残る
+      * 覚えるのは鍵（Cookie）の中身ではなく、そのハッシュだけ
+      * 「無効にする」は一時停止になる。待ち受けを止めるだけで、端末は忘れない
+      * 端末は、一覧から1台ずつ、またはすべて切れる（スマホをなくしたとき用）
     """
 
     SESSION_SECONDS = 7 * 24 * 3600
+    REMEMBER_SECONDS = 90 * 24 * 3600
     CODE_SECONDS = 300
     MAX_FAILS = 5
+    RETRY_SECONDS = 20.0
+    PURGE_EVERY = 60
 
     def __init__(self, cfg, factory, ip_func=lan_ip, acceptable=acceptable_ip,
-                 port=None, clock=time.time, fixed_ip=""):
+                 port=None, clock=time.time, fixed_ip="", db=None, remember=False):
         self.cfg = cfg
         self.factory = factory
         self.fixed_ip = fixed_ip or ""     # 設定で決め打ちにしたアドレス（Tailscale など）
@@ -159,12 +181,20 @@ class Mobile:
         self.acceptable = acceptable
         self.port = port or cfg.port
         self.clock = clock
+        self.db = db
+        self.remember = bool(remember and db is not None)
         self.lock = threading.RLock()
         self.httpd = None
         self.ip = None
         self.codes = {}
-        self.sessions = {}
+        self.sessions = {}                 # 記憶しないときだけ使う（メモリの中）
         self.fails = 0
+        self.paused = False
+        self.always_on = False
+        self.last_error = None
+        self._stop = threading.Event()
+        self._thread = None
+        self._last_purge = 0.0
 
     # -- 状態 -------------------------------------------------------------
     @property
@@ -175,17 +205,57 @@ class Mobile:
     def host(self):
         return "%s:%d" % (self.ip, self.port)
 
+    @property
+    def base_url(self):
+        return "http://%s/" % self.host if self.enabled else None
+
+    @property
+    def session_seconds(self):
+        return self.REMEMBER_SECONDS if self.remember else self.SESSION_SECONDS
+
+    @staticmethod
+    def _hash(sid):
+        return hashlib.sha256(sid.encode("utf-8")).hexdigest()
+
     def _purge(self):
         now = self.clock()
         for table in (self.codes, self.sessions):
             for key in [k for k, exp in table.items() if exp < now]:
                 del table[key]
+        if self.remember and now - self._last_purge >= self.PURGE_EVERY:
+            self._last_purge = now
+            self.db.execute("DELETE FROM paired_devices WHERE expires < ?", (int(now),))
+            self.db.commit()
+
+    def device_count(self):
+        with self.lock:
+            self._purge()
+            if self.remember:
+                row = self.db.execute(
+                    "SELECT COUNT(*) AS n FROM paired_devices WHERE expires >= ?",
+                    (int(self.clock()),)).fetchone()
+                return row["n"]
+            return len(self.sessions)
+
+    def devices(self):
+        """記憶している端末の一覧（常時オンのときだけ）。"""
+        if not self.remember:
+            return []
+        with self.lock:
+            self._purge()
+            rows = self.db.execute(
+                "SELECT sid_hash, created, label FROM paired_devices WHERE expires >= ?"
+                " ORDER BY created DESC", (int(self.clock()),)).fetchall()
+        return [{"id": r["sid_hash"][:10], "label": r["label"] or "端末",
+                 "created": r["created"]} for r in rows]
 
     def status(self):
         with self.lock:
-            self._purge()
-            out = {"enabled": self.enabled, "devices": len(self.sessions),
-                   "configured_ip": self.fixed_ip or None}
+            out = {"enabled": self.enabled, "devices": self.device_count(),
+                   "configured_ip": self.fixed_ip or None,
+                   "always_on": self.always_on, "remember": self.remember,
+                   "paused": self.paused, "last_error": self.last_error,
+                   "base_url": self.base_url, "devices_list": self.devices()}
             if self.enabled:
                 out["host"] = self.host
                 # 回線が変わって IP が替わると、開いた先に届かなくなる
@@ -195,6 +265,7 @@ class Mobile:
     # -- 開く・閉じる ------------------------------------------------------
     def enable(self):
         with self.lock:
+            self.paused = False
             if self.enabled:
                 return
             ip = self.ip_func()
@@ -218,15 +289,45 @@ class Mobile:
             httpd.daemon_threads = True
             threading.Thread(target=httpd.serve_forever, daemon=True).start()
             self.httpd, self.ip, self.fails = httpd, ip, 0
+            self.last_error = None
 
     def disable(self):
+        """待ち受けを止める。記憶しないときは、渡した鍵もすべて消える。"""
         with self.lock:
             httpd, self.httpd = self.httpd, None
+            self.paused = True               # 常時オンの再試行が、すぐ開き直さないように
             self.codes.clear()
-            self.sessions.clear()
+            if not self.remember:
+                self.sessions.clear()
         if httpd is not None:
             httpd.shutdown()
             httpd.server_close()
+
+    def start_always_on(self):
+        """起動のたびに自動で開く。開けない間（Tailscale がまだ上がっていない等）は再試行する。"""
+        with self.lock:
+            if self._thread is not None:
+                return
+            self.always_on = True
+
+        def loop():
+            while not self._stop.is_set():
+                if not self.enabled and not self.paused:
+                    try:
+                        self.enable()
+                    except MobileError as exc:
+                        self.last_error = str(exc)
+                self._stop.wait(self.RETRY_SECONDS)
+
+        self._thread = threading.Thread(target=loop, daemon=True)
+        self._thread.start()
+
+    def close(self):
+        """アプリの終了。再試行を止め、待ち受けを閉じる（記憶した端末は残す）。"""
+        self._stop.set()
+        self.disable()
+        if self._thread is not None:
+            self._thread.join(timeout=2)
 
     # -- ペアリング --------------------------------------------------------
     def new_pairing(self):
@@ -241,7 +342,7 @@ class Mobile:
             return {"url": "http://%s/pair?code=%s" % (self.host, code),
                     "expires_in": self.CODE_SECONDS}
 
-    def redeem(self, code):
+    def redeem(self, code, label=""):
         """合言葉を鍵に引き換える。使えない場合は None。
 
         間違いが続いたら、有効な合言葉を全部捨てる。パソコンで新しく
@@ -261,7 +362,15 @@ class Mobile:
                 return None
             del self.codes[hit]                      # 1回しか使えない
             sid = _secrets.token_urlsafe(32)
-            self.sessions[sid] = self.clock() + self.SESSION_SECONDS
+            now = self.clock()
+            if self.remember:
+                self.db.execute(
+                    "INSERT INTO paired_devices (sid_hash, created, expires, label)"
+                    " VALUES (?, ?, ?, ?)",
+                    (self._hash(sid), int(now), int(now + self.REMEMBER_SECONDS), label[:40]))
+                self.db.commit()
+            else:
+                self.sessions[sid] = now + self.SESSION_SECONDS
             return sid
 
     def valid_session(self, sid):
@@ -269,7 +378,36 @@ class Mobile:
             return False
         with self.lock:
             self._purge()
+            if self.remember:
+                row = self.db.execute(
+                    "SELECT expires FROM paired_devices WHERE sid_hash=?",
+                    (self._hash(sid),)).fetchone()
+                return row is not None and row["expires"] >= self.clock()
             return sid in self.sessions
+
+    # -- 端末を切る --------------------------------------------------------
+    def revoke(self, device_id):
+        """記憶している端末を1台切る。切れたら True。"""
+        if not self.remember or not re.fullmatch(r"[0-9a-f]{10}", device_id or ""):
+            return False
+        with self.lock:
+            row = self.db.execute(
+                "SELECT COUNT(*) AS n FROM paired_devices WHERE substr(sid_hash,1,10)=?",
+                (device_id,)).fetchone()
+            if not row["n"]:
+                return False
+            self.db.execute("DELETE FROM paired_devices WHERE substr(sid_hash,1,10)=?",
+                            (device_id,))
+            self.db.commit()
+            return True
+
+    def revoke_all(self):
+        """渡した鍵をすべて無効にする（待ち受けは、そのまま）。"""
+        with self.lock:
+            self.sessions.clear()
+            if self.remember:
+                self.db.execute("DELETE FROM paired_devices")
+                self.db.commit()
 
 
 def _notice_page(title, lines):
@@ -477,7 +615,7 @@ def make_handler(cfg, db, runner, control, token, outbox, mobile=None, lan=None)
                 "text/html; charset=utf-8")
 
         def _pair(self, code):
-            sid = lan.redeem(code)
+            sid = lan.redeem(code, device_label(self.headers.get("User-Agent")))
             if sid is None:
                 return self._send(403, _notice_page(
                     "この QR コードは使えません",
@@ -488,7 +626,7 @@ def make_handler(cfg, db, runner, control, token, outbox, mobile=None, lan=None)
             self.send_header("Location", "/")
             self.send_header("Set-Cookie",
                              "%s=%s; HttpOnly; SameSite=Strict; Path=/; Max-Age=%d"
-                             % (SESSION_COOKIE, sid, Mobile.SESSION_SECONDS))
+                             % (SESSION_COOKIE, sid, lan.session_seconds))
             self.send_header("Content-Length", "0")
             self.send_header("Cache-Control", "no-store")
             self.send_header("Referrer-Policy", "no-referrer")
@@ -538,9 +676,15 @@ def make_handler(cfg, db, runner, control, token, outbox, mobile=None, lan=None)
                 return self._json({"error": str(exc)}, 400)
             self._json({"error": "not found"}, 404)
 
-        def _mobile_api(self, path):
+        def _mobile_api(self, path, payload):
             """スマホ接続の操作。パソコンの中からだけ（LAN 側には経路が無い）。"""
             try:
+                if path == "/api/mobile/revoke":
+                    revoked = mobile.revoke(str(payload.get("id") or ""))
+                    return self._json(dict(mobile.status(), revoked=revoked))
+                if path == "/api/mobile/revoke_all":
+                    mobile.revoke_all()
+                    return self._json(mobile.status())
                 if path == "/api/mobile/enable":
                     mobile.enable()
                     return self._json(mobile.status())
@@ -594,7 +738,7 @@ def make_handler(cfg, db, runner, control, token, outbox, mobile=None, lan=None)
 
             path = urlparse(self.path).path
             if mobile is not None and lan is None and path.startswith("/api/mobile/"):
-                return self._mobile_api(path)
+                return self._mobile_api(path, payload)
             if path.startswith("/api/ai/"):
                 return self._ai_post(path, payload)
             if path == "/api/send":
@@ -703,12 +847,14 @@ def serve(cfg):
         threading.Timer(6.0, runner.start).start()
 
     outbox = Outbox(cfg, db, on_sent=after_sent)
+    always_on = bool(getattr(cfg, "mobile_always_on", False))
     mobile = Mobile(
         cfg,
         lambda gate: make_handler(cfg, db, runner, control, token, outbox, lan=gate),
         port=getattr(cfg, "mobile_port", None),
         fixed_ip=getattr(cfg, "mobile_ip", ""),
-        ip_func=(lambda: cfg.mobile_ip) if getattr(cfg, "mobile_ip", "") else lan_ip)
+        ip_func=(lambda: cfg.mobile_ip) if getattr(cfg, "mobile_ip", "") else lan_ip,
+        db=db, remember=always_on)
     httpd = ThreadingHTTPServer(
         ("127.0.0.1", cfg.port),
         make_handler(cfg, db, runner, control, token, outbox, mobile=mobile))
@@ -716,6 +862,8 @@ def serve(cfg):
     control["httpd"] = httpd
     httpd.gline_db = db
     httpd.gline_mobile = mobile
+    if always_on:
+        mobile.start_always_on()         # 開けるまで、静かに再試行する
     return httpd
 
 
@@ -728,7 +876,7 @@ def shutdown(httpd):
     mobile = getattr(httpd, "gline_mobile", None)
     if mobile is not None:
         try:
-            mobile.disable()          # スマホ用の待ち受けも必ず閉じる
+            mobile.close()            # スマホ用の待ち受けも必ず閉じる（再試行も止める）
         except Exception:
             pass
     try:

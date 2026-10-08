@@ -26,6 +26,8 @@
 
   "//mobile_ip": "スマホ用の待ち受けアドレス。空なら Wi-Fi のアドレスを自動で。外出先から読むなら Tailscale のアドレス（100.x.x.x）。",
   "mobile_ip": "",
+  "//mobile_always_on": "true にすると、起動のたびにスマホ用の待ち受けを自動で開き、ペアリングしたスマホを90日覚える。mobile_ip が必須。",
+  "mobile_always_on": false,
 
   "//ai_model": "AI で返信案で最初に使うモデル。空なら gemini-3.5-flash から。",
   "ai_model": "",

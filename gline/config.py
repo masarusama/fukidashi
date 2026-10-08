@@ -27,6 +27,7 @@ DEFAULTS = {
     "max_fetch_bytes": 5000000,
     "ai_model": "",
     "mobile_ip": "",
+    "mobile_always_on": False,
 }
 
 
@@ -101,6 +102,15 @@ class Config:
                 raise ConfigError("mobile_ip の形が正しくありません: %r" % self.mobile_ip)
             if addr.version != 4:
                 raise ConfigError("mobile_ip には IPv4 のアドレスを書いてください: %r" % self.mobile_ip)
+
+        # 常時オン: 起動のたびにスマホ用の待ち受けを自動で開き、ペアリングした端末を
+        # 90日間覚える。アドレスを決めずに使うと、知らない Wi-Fi で開いてしまうので、
+        # mobile_ip（Tailscale のアドレス）を必須にする。
+        self.mobile_always_on = bool(data["mobile_always_on"])
+        if self.mobile_always_on and not self.mobile_ip:
+            raise ConfigError(
+                "mobile_always_on を使うには、mobile_ip（Tailscale のアドレス）も書いてください。"
+                "アドレスを決めずに常時オンにすると、知らない Wi-Fi でも待ち受けが開いてしまいます。")
         self.mute = [m.strip().lower() for m in data["mute"] if m.strip()]
         self.force_people = [m.strip().lower() for m in data["force_people"] if m.strip()]
         self.force_notices = [m.strip().lower() for m in data["force_notices"] if m.strip()]

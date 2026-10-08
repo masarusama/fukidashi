@@ -47,6 +47,15 @@ CREATE TABLE IF NOT EXISTS names (
     ts   INTEGER NOT NULL DEFAULT 0
 );
 
+-- スマホとのペアリング（「常時オン」のときだけ使う）。
+-- 鍵（Cookie）の中身は持たず、そのハッシュだけを持つ。
+CREATE TABLE IF NOT EXISTS paired_devices (
+    sid_hash TEXT PRIMARY KEY,
+    created  INTEGER NOT NULL,
+    expires  INTEGER NOT NULL,
+    label    TEXT NOT NULL DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS state (
     key   TEXT PRIMARY KEY,
     value TEXT
