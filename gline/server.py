@@ -624,8 +624,13 @@ def make_handler(cfg, db, runner, control, token, outbox, mobile=None, lan=None)
                     "text/html; charset=utf-8")
             self.send_response(302)
             self.send_header("Location", "/")
+            # SameSite は Lax。Strict にすると、カメラやメッセージのリンクなど、よその
+            # アプリ・サイトから開いたとき、最初の1回（ペアリング直後の転送先）に鍵が
+            # 付かず、ペアリングできたのに「まだ接続されていません」と出る。
+            # Lax でも、状態を変える操作（POST）には鍵が付かない。そのうえ /api/ には
+            # 独自ヘッダの合言葉と Origin の検査も要るので、守りは変わらない。
             self.send_header("Set-Cookie",
-                             "%s=%s; HttpOnly; SameSite=Strict; Path=/; Max-Age=%d"
+                             "%s=%s; HttpOnly; SameSite=Lax; Path=/; Max-Age=%d"
                              % (SESSION_COOKIE, sid, lan.session_seconds))
             self.send_header("Content-Length", "0")
             self.send_header("Cache-Control", "no-store")

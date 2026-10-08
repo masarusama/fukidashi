@@ -252,8 +252,11 @@ check("画面へ転送する", hdrs.get("Location"), "/")
 cookie_line = hdrs.get("Set-Cookie", "")
 check_true("鍵を渡す", cookie_line.startswith(server.SESSION_COOKIE + "="))
 check_true("鍵は JavaScript から読めない（HttpOnly）", "HttpOnly" in cookie_line)
-check_true("鍵はよそのサイトからの要求では送られない（SameSite=Strict）",
-           "SameSite=Strict" in cookie_line)
+# Strict にすると、カメラやメッセージのリンクから開いたとき、ペアリング直後の転送先に
+# 鍵が付かず「まだ接続されていません」になる（実機で起きた）。Lax なら付く。
+check_true("鍵は SameSite=Lax（Strict にしない）", "SameSite=Lax" in cookie_line)
+check("Strict は使わない（リンクから開いた最初の1回に鍵が付かなくなる）",
+      "SameSite=Strict" in cookie_line, False)
 sid = re.match(server.SESSION_COOKIE + r"=([^;]+)", cookie_line).group(1)
 check_true("鍵は十分に長い", len(sid) >= 40)
 
