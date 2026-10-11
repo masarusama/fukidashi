@@ -126,6 +126,28 @@ html, body {
 }
 .tab[aria-selected="true"] em { color: var(--unread); }
 
+.await-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  margin: 0 0 8px; padding: 3px 10px; font: inherit; font-size: 12px;
+  border: 1px solid var(--border); border-radius: 999px;
+  background: none; color: var(--text-dim); cursor: pointer;
+}
+.await-chip em { font-style: normal; font-weight: 700; color: var(--unread); }
+.await-chip[aria-pressed="true"] {
+  background: var(--unread); border-color: var(--unread); color: #fff;
+}
+.await-chip[aria-pressed="true"] em { color: #fff; }
+.await-tag {
+  flex: none; margin-left: 6px; padding: 0 6px; border-radius: 4px;
+  font-size: 10.5px; font-weight: 700; line-height: 17px;
+  color: var(--unread); border: 1px solid var(--unread);
+}
+.await-btn {
+  margin-left: auto; flex: none; font: inherit; font-size: 12px;
+  padding: 4px 10px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border); background: none; color: var(--text-dim);
+}
+
 .searchbox input {
   width: 100%; font: inherit; font-size: 14px;
   padding: 8px 12px; border-radius: 999px;

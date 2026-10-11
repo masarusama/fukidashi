@@ -210,6 +210,29 @@ check("知らないメールは 404",
 check("よそのサイトの Host は断る",
       fetch(A + "0", token=token, host="evil.example.com")[0], 403)
 
+# 未返信の目印
+def alice():
+    return [c for c in fetch("/api/conversations", token=token)[1]["conversations"]
+            if c["key"] == "alice@example.com"][0]
+
+check("一覧に未返信の情報が載る", (alice()["awaiting"], alice()["dismissed"]), (True, False))
+check("対応不要にできる",
+      fetch("/api/no_reply_needed", data={"key": "alice@example.com", "done": True},
+            token=token)[0], 200)
+check("対応不要になる", (alice()["awaiting"], alice()["dismissed"]), (False, True))
+check("戻せる",
+      fetch("/api/no_reply_needed", data={"key": "alice@example.com", "done": False},
+            token=token)[0], 200)
+check("戻る", alice()["awaiting"], True)
+check("対応不要: 合言葉なしは断る",
+      fetch("/api/no_reply_needed", data={"key": "alice@example.com", "done": True})[0], 403)
+check("対応不要: 会話の指定なしは 400",
+      fetch("/api/no_reply_needed", data={"done": True}, token=token)[0], 400)
+check("対応不要: 自分へのメモは 400",
+      fetch("/api/no_reply_needed", data={"key": "self", "done": True}, token=token)[0], 400)
+check("対応不要: 知らない会話は 404",
+      fetch("/api/no_reply_needed", data={"key": "x@y.z", "done": True}, token=token)[0], 404)
+
 # 異常系
 check("会話の指定なしは断る", fetch("/api/send", data={"text": "x"}, token=token)[0], 400)
 check("空の本文は断る",

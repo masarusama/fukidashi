@@ -758,6 +758,13 @@ def make_handler(cfg, db, runner, control, token, outbox, mobile=None, lan=None)
                     return self._json(outbox.queue(key, payload.get("text") or ""))
                 except smtpsend.SendError as exc:
                     return self._json({"error": str(exc)}, 400)
+            if path == "/api/no_reply_needed":
+                key = (payload.get("key") or "").strip()
+                if not key or key == "self":
+                    return self._json({"error": "会話が指定されていません"}, 400)
+                if not store.set_no_reply_needed(db, key, bool(payload.get("done"))):
+                    return self._json({"error": "見つかりません"}, 404)
+                return self._json({"ok": True})
             if path == "/api/send/cancel":
                 return self._json(
                     {"cancelled": outbox.cancel((payload.get("id") or "").strip())})

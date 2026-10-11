@@ -387,6 +387,8 @@ def conversations(conn, cfg, query=None, kind=None, account=None):
                           "WHERE dup=0 AND is_me=0 AND from_addr <> ''"):
         senders.setdefault(r["conv_key"], []).append(r["from_addr"])
 
+    cleared = _noreply_marks(conn)
+
     out = []
     q = (query or "").strip().lower()
     for r in rows:
@@ -399,7 +401,7 @@ def conversations(conn, cfg, query=None, kind=None, account=None):
             continue
         label = label_for(key, names)
         last = conn.execute(
-            "SELECT body, is_me, subject FROM messages WHERE conv_key=? AND dup=0"
+            "SELECT body, is_me, subject, ts FROM messages WHERE conv_key=? AND dup=0"
             + (" AND account=?" if account else "") +
             " ORDER BY ts DESC LIMIT 1",
             ([key, account] if account else [key])).fetchone()
@@ -413,9 +415,15 @@ def conversations(conn, cfg, query=None, kind=None, account=None):
                     (key, "%" + q + "%", "%" + q + "%")).fetchone() is not None
             if not hit:
                 continue
+        # 未返信: 「人」の会話で、いちばん新しい1通が相手からのもの。
+        # 「対応不要」にした時点より新しい着信があれば、また未返信に戻る。
+        from_them = (group == "people" and key != "self" and not last["is_me"])
+        dismissed = from_them and cleared.get(key, 0) >= last["ts"]
         out.append({
             "key": key,
             "label": label,
+            "awaiting": from_them and not dismissed,
+            "dismissed": dismissed,
             "addrs": [] if key == "self" else key.split("|"),
             "last_ts": r["last_ts"],
             "total": r["total"],
@@ -426,6 +434,41 @@ def conversations(conn, cfg, query=None, kind=None, account=None):
             "snippet": ("自分: " if last["is_me"] else "") + snippet,
         })
     return out
+
+
+NOREPLY_PREFIX = "noreply:"
+
+
+def _noreply_marks(conn):
+    """{会話: 「対応不要」にした時点での最新の受信時刻}"""
+    out = {}
+    for r in conn.execute("SELECT key, value FROM state WHERE key LIKE ?",
+                          (NOREPLY_PREFIX + "%",)):
+        try:
+            out[r["key"][len(NOREPLY_PREFIX):]] = int(r["value"])
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def set_no_reply_needed(conn, conv_key, done):
+    """会話を「対応不要」にする／戻す。
+
+    「対応不要」にした時点の最新の時刻を覚えるので、そのあとに相手から
+    新しいメールが来れば、自動で未返信に戻る。受信箱には何も書かない。
+    """
+    key = NOREPLY_PREFIX + conv_key
+    if done:
+        row = conn.execute(
+            "SELECT MAX(ts) AS t FROM messages WHERE conv_key=? AND dup=0",
+            (conv_key,)).fetchone()
+        if not row or row["t"] is None:
+            return False
+        set_state(conn, key, row["t"])
+    else:
+        conn.execute("DELETE FROM state WHERE key=?", (key,))
+    conn.commit()
+    return True
 
 
 def messages(conn, conv_key, limit=400, before=None, account=None):

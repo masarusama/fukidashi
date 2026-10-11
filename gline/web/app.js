@@ -15,6 +15,10 @@ function savedKind() {
   return 'people';
 }
 
+function savedAwaiting() {
+  try { return localStorage.getItem('gline.awaiting') === '1'; } catch (e) { return false; }
+}
+
 function savedAccount() {
   try { return localStorage.getItem('gline.account') || ''; }
   catch (e) { return ''; }
@@ -25,6 +29,7 @@ const state = {
   account: savedAccount(),   // '' = すべて
   all: [],
   kind: savedKind(),
+  awaitingOnly: savedAwaiting(),   // 「未返信」だけに絞る
   conversations: [],
   activeKey: null,
   activeLabel: '',
@@ -216,9 +221,13 @@ async function loadConversations(keepActive = true) {
 }
 
 function applyKind() {
-  state.conversations = state.all.filter((c) => c.kind === state.kind);
+  state.conversations = state.all.filter((c) => c.kind === state.kind &&
+    (!state.awaitingOnly || state.kind !== 'people' || c.awaiting));
   renderTabs();
   renderConversations();
+  if (state.activeKey) {
+    renderAwaitBtn(state.all.find((c) => c.key === state.activeKey));
+  }
 }
 
 function renderTabs() {
@@ -230,6 +239,45 @@ function renderTabs() {
     $(tab).setAttribute('aria-selected', String(state.kind === kind));
     $(tab).title = `${list.length} 会話 / 未読 ${unread} 通`;
   }
+  const waiting = state.all.filter((c) => c.awaiting).length;
+  $('awaitChip').hidden = state.kind !== 'people';
+  $('awaitChip').setAttribute('aria-pressed', String(state.awaitingOnly));
+  $('cntAwait').textContent = waiting ? String(waiting) : '0';
+}
+
+function toggleAwaiting() {
+  state.awaitingOnly = !state.awaitingOnly;
+  try { localStorage.setItem('gline.awaiting', state.awaitingOnly ? '1' : '0'); }
+  catch (e) { /* 保存できなくても動く */ }
+  state.activeKey = null;
+  applyKind();
+  const wide = window.matchMedia('(min-width: 761px)').matches;
+  if (wide && state.conversations.length) openConversation(state.conversations[0].key);
+}
+
+// 「対応不要」にする／未返信に戻す。受信箱には何も書かない（手元の記録だけ）。
+async function setNoReplyNeeded(key, done) {
+  try {
+    await api('/api/no_reply_needed', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, done }),
+    });
+    await loadConversations(true);
+  } catch (e) {
+    toast('変更できませんでした: ' + e.message);
+  }
+}
+
+function renderAwaitBtn(conv) {
+  const b = $('awaitBtn');
+  b.hidden = !conv || !(conv.awaiting || conv.dismissed);
+  if (b.hidden) return;
+  b.textContent = conv.awaiting ? '対応不要にする' : '未返信に戻す';
+  b.title = conv.awaiting
+    ? '返事は要らない会話として、未返信から外す（新しいメールが来ればまた戻る）'
+    : '未返信の目印をつけ直す';
+  b.onclick = () => setNoReplyNeeded(conv.key, !!conv.awaiting);
 }
 
 function switchKind(kind) {
@@ -291,6 +339,12 @@ function renderConversations() {
     time.className = 'conv-time';
     time.textContent = listTime(c.last_ts);
     top.append(name, time);
+    if (c.awaiting) {
+      const tag = document.createElement('div');
+      tag.className = 'await-tag';
+      tag.textContent = '未返信';
+      top.appendChild(tag);
+    }
     if (c.unread) {
       const b = document.createElement('div');
       b.className = 'badge';
@@ -323,6 +377,7 @@ async function openConversation(key) {
   $('talkSub').textContent = conv
     ? (conv.addrs.join(', ') + `　・　${conv.total} 通`)
     : '';
+  renderAwaitBtn(conv);
   if (isNarrow() && !$('app').classList.contains('show-talk')) {
     // 履歴に積んでおくと、Android の戻る操作やスワイプで一覧へ戻れる
     history.pushState({ talk: true }, '');
@@ -1275,6 +1330,7 @@ $('send').addEventListener('click', () => doSend());
 for (const id of ['tabPeople', 'tabNotice']) {
   $(id).addEventListener('click', (e) => switchKind(e.currentTarget.dataset.kind));
 }
+$('awaitChip').addEventListener('click', toggleAwaiting);
 $('sync').addEventListener('click', () => runSync(false));
 
 $('quit').addEventListener('click', async () => {

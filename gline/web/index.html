@@ -30,6 +30,10 @@
           <span>お知らせ</span><em id="cntNotice"></em>
         </button>
       </div>
+      <button class="await-chip" id="awaitChip" aria-pressed="false" hidden
+              title="いちばん新しい1通が相手からで、まだ返事をしていない会話">
+        未返信 <em id="cntAwait"></em>
+      </button>
       <div class="searchbox">
         <input id="search" type="search" placeholder="名前・本文で検索  （/）" autocomplete="off">
       </div>
@@ -45,6 +49,7 @@
         <div class="talk-name" id="talkName">会話を選んでください</div>
         <div class="talk-sub" id="talkSub"></div>
       </div>
+      <button class="await-btn" id="awaitBtn" hidden></button>
     </header>
     <div class="stream" id="stream">
       <div class="empty" id="empty">

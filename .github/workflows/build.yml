@@ -36,6 +36,7 @@ jobs:
           python tests/test_mobile.py
           python tests/test_ai.py
           python tests/test_always_on.py
+          python tests/test_awaiting.py
 
       - name: .exe を作る
         run: pyinstaller packaging/fukidashi.spec --noconfirm
@@ -78,6 +79,7 @@ jobs:
           python3 tests/test_mobile.py
           python3 tests/test_ai.py
           python3 tests/test_always_on.py
+          python3 tests/test_awaiting.py
 
       - name: .app を作る
         run: python3 make_app.py --zip
