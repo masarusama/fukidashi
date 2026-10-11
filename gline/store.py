@@ -388,6 +388,7 @@ def conversations(conn, cfg, query=None, kind=None, account=None):
         senders.setdefault(r["conv_key"], []).append(r["from_addr"])
 
     cleared = _noreply_marks(conn)
+    drafts = _draft_keys(conn)
 
     out = []
     q = (query or "").strip().lower()
@@ -422,6 +423,7 @@ def conversations(conn, cfg, query=None, kind=None, account=None):
         out.append({
             "key": key,
             "label": label,
+            "draft": key in drafts,
             "awaiting": from_them and not dismissed,
             "dismissed": dismissed,
             "addrs": [] if key == "self" else key.split("|"),
@@ -434,6 +436,33 @@ def conversations(conn, cfg, query=None, kind=None, account=None):
             "snippet": ("自分: " if last["is_me"] else "") + snippet,
         })
     return out
+
+
+DRAFT_PREFIX = "draft:"
+DRAFT_MAX = 20000
+
+
+def get_draft(conn, conv_key):
+    return get_state(conn, DRAFT_PREFIX + conv_key, None, "") or ""
+
+
+def set_draft(conn, conv_key, text):
+    """返信の書きかけを会話ごとに1つ保存する。空にしたら消す。
+
+    保存先はこのパソコンの DB だけ（メール本文と同じ場所）。送信はしない。
+    """
+    text = (text or "")[:DRAFT_MAX]
+    key = DRAFT_PREFIX + conv_key
+    if text.strip():
+        set_state(conn, key, text)
+    else:
+        conn.execute("DELETE FROM state WHERE key=?", (key,))
+    conn.commit()
+
+
+def _draft_keys(conn):
+    return {r["key"][len(DRAFT_PREFIX):] for r in conn.execute(
+        "SELECT key FROM state WHERE key LIKE ? AND value <> ''", (DRAFT_PREFIX + "%",))}
 
 
 NOREPLY_PREFIX = "noreply:"

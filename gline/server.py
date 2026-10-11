@@ -758,6 +758,13 @@ def make_handler(cfg, db, runner, control, token, outbox, mobile=None, lan=None)
                     return self._json(outbox.queue(key, payload.get("text") or ""))
                 except smtpsend.SendError as exc:
                     return self._json({"error": str(exc)}, 400)
+            if path == "/api/draft":
+                key = (payload.get("key") or "").strip()
+                text = payload.get("text")
+                if not key or key == "self" or not isinstance(text, str):
+                    return self._json({"error": "会話が指定されていません"}, 400)
+                store.set_draft(db, key, text)
+                return self._json({"ok": True})
             if path == "/api/no_reply_needed":
                 key = (payload.get("key") or "").strip()
                 if not key or key == "self":
@@ -835,6 +842,11 @@ def make_handler(cfg, db, runner, control, token, outbox, mobile=None, lan=None)
                     return self._json({"error": str(exc)}, 400)
                 return self._json({k: v for k, v in ctx.items()
                                    if k != "references"})
+            if u.path == "/api/draft":
+                key = one("key")
+                if not key:
+                    return self._json({"error": "key が必要です"}, 400)
+                return self._json({"text": store.get_draft(db, key)})
             if u.path == "/api/send/state":
                 st = outbox.state(one("id") or "")
                 if st is None:

@@ -233,6 +233,36 @@ check("対応不要: 自分へのメモは 400",
 check("対応不要: 知らない会話は 404",
       fetch("/api/no_reply_needed", data={"key": "x@y.z", "done": True}, token=token)[0], 404)
 
+# 下書き
+K = "alice@example.com"
+sent_before = len(sent)
+check("最初は下書きが無い", fetch("/api/draft?key=" + K, token=token)[1], {"text": ""})
+check("一覧にも出ない", alice()["draft"], False)
+check("下書きを保存できる",
+      fetch("/api/draft", data={"key": K, "text": "書きかけです\n二行目"}, token=token)[0], 200)
+check("下書きを読める",
+      fetch("/api/draft?key=" + K, token=token)[1], {"text": "書きかけです\n二行目"})
+check("一覧に下書きの印が出る", alice()["draft"], True)
+check("下書きを上書きできる",
+      fetch("/api/draft", data={"key": K, "text": "v2"}, token=token)[0], 200)
+check("上書きされる", fetch("/api/draft?key=" + K, token=token)[1]["text"], "v2")
+fetch("/api/draft", data={"key": K, "text": "  \n "}, token=token)
+check("空白だけにすると消える", (fetch("/api/draft?key=" + K, token=token)[1]["text"], alice()["draft"]),
+      ("", False))
+fetch("/api/draft", data={"key": K, "text": "x" * 50000}, token=token)
+check("長すぎる下書きは切り詰める",
+      len(fetch("/api/draft?key=" + K, token=token)[1]["text"]), store.DRAFT_MAX)
+fetch("/api/draft", data={"key": K, "text": ""}, token=token)
+check("下書き: 合言葉なしは断る",
+      fetch("/api/draft", data={"key": K, "text": "x"})[0], 403)
+check("下書き: 会話の指定なしは 400",
+      fetch("/api/draft", data={"text": "x"}, token=token)[0], 400)
+check("下書き: 自分へのメモは 400",
+      fetch("/api/draft", data={"key": "self", "text": "x"}, token=token)[0], 400)
+check("下書き: 文字でない本文は 400",
+      fetch("/api/draft", data={"key": K, "text": 5}, token=token)[0], 400)
+check("下書きを保存しても送信されない", len(sent), sent_before)
+
 # 異常系
 check("会話の指定なしは断る", fetch("/api/send", data={"text": "x"}, token=token)[0], 400)
 check("空の本文は断る",

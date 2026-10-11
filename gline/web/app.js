@@ -29,6 +29,7 @@ const state = {
   account: savedAccount(),   // '' = すべて
   all: [],
   kind: savedKind(),
+  find: { q: '', idx: -1, hits: [], scroll: false },   // この会話の中の検索
   awaitingOnly: savedAwaiting(),   // 「未返信」だけに絞る
   conversations: [],
   activeKey: null,
@@ -339,6 +340,12 @@ function renderConversations() {
     time.className = 'conv-time';
     time.textContent = listTime(c.last_ts);
     top.append(name, time);
+    if (c.draft) {
+      const tag = document.createElement('div');
+      tag.className = 'await-tag draft-tag';
+      tag.textContent = '下書き';
+      top.appendChild(tag);
+    }
     if (c.awaiting) {
       const tag = document.createElement('div');
       tag.className = 'await-tag';
@@ -369,6 +376,7 @@ function renderConversations() {
 /* ---------------- トーク ---------------- */
 
 async function openConversation(key) {
+  flushDraft();
   state.activeKey = key;
   state.exhausted = false;
   const conv = state.conversations.find((c) => c.key === key);
@@ -378,6 +386,8 @@ async function openConversation(key) {
     ? (conv.addrs.join(', ') + `　・　${conv.total} 通`)
     : '';
   renderAwaitBtn(conv);
+  // 左の検索で探してきたなら、その言葉をこの会話の中でも光らせる
+  setFind(state.query || '', !!state.query);
   if (isNarrow() && !$('app').classList.contains('show-talk')) {
     // 履歴に積んでおくと、Android の戻る操作やスワイプで一覧へ戻れる
     history.pushState({ talk: true }, '');
@@ -425,6 +435,93 @@ function dividerEl(text, cls) {
   return d;
 }
 
+// 検索語に当たった所を <mark> で包む。textContent と同じ安全さ（HTML として解釈しない）
+function setBubbleText(el, text, q) {
+  const needle = (q || '').trim().toLowerCase();
+  if (!needle) { el.textContent = text; return; }
+  const hay = text.toLowerCase();
+  let pos = 0;
+  for (;;) {
+    const at = hay.indexOf(needle, pos);
+    if (at < 0) break;
+    if (at > pos) el.appendChild(document.createTextNode(text.slice(pos, at)));
+    const mk = document.createElement('mark');
+    mk.className = 'hit';
+    mk.textContent = text.slice(at, at + needle.length);
+    el.appendChild(mk);
+    pos = at + needle.length;
+  }
+  if (pos < text.length) el.appendChild(document.createTextNode(text.slice(pos)));
+}
+
+/* ---------------- 会話の中の検索 ---------------- */
+
+function refreshFind(scroll) {
+  const f = state.find;
+  const stream = $('stream');
+  f.hits = [...stream.querySelectorAll('mark.hit')];
+  if (!f.q.trim()) {
+    f.idx = -1;
+    $('findCount').textContent = '';
+  } else if (!f.hits.length) {
+    f.idx = -1;
+    $('findCount').textContent = '見つかりません';
+  } else {
+    // いちばん新しい一致から始める（チャットの検索の流儀）
+    if (f.idx < 0 || f.idx >= f.hits.length) f.idx = f.hits.length - 1;
+    f.hits.forEach((h, i) => h.classList.toggle('cur', i === f.idx));
+    $('findCount').textContent = `${f.idx + 1} / ${f.hits.length}`;
+    if (scroll || f.scroll) f.hits[f.idx].scrollIntoView({ block: 'center' });
+  }
+  f.scroll = false;
+  $('findAll').hidden = !(f.q.trim() && !state.exhausted);
+}
+
+function stepFind(dir) {
+  const f = state.find;
+  if (!f.hits.length) return;
+  f.hits[f.idx].classList.remove('cur');
+  f.idx = (f.idx + dir + f.hits.length) % f.hits.length;
+  f.hits[f.idx].classList.add('cur');
+  $('findCount').textContent = `${f.idx + 1} / ${f.hits.length}`;
+  f.hits[f.idx].scrollIntoView({ block: 'center' });
+}
+
+function setFind(q, open) {
+  state.find.q = q;
+  state.find.idx = -1;
+  state.find.scroll = true;
+  $('findbar').hidden = !open;
+  $('findInput').value = q;
+  if (!open) $('findCount').textContent = '';
+}
+
+function openFindBar() {
+  $('findbar').hidden = false;
+  $('findInput').focus();
+  $('findInput').select();
+}
+
+function closeFindBar() {
+  const had = !!state.find.q;
+  setFind('', false);
+  if (had && state.messages.length) renderStream(false);
+}
+
+async function findAllOlder() {
+  const btn = $('findAll');
+  btn.disabled = true;
+  try {
+    while (!state.exhausted) await loadOlder();
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    btn.disabled = false;
+    state.find.scroll = true;
+    renderStream(false);
+  }
+}
+
 function bubbleEl(m, showSender) {
   const row = document.createElement('div');
   row.className = 'row ' + (m.is_me ? 'me' : 'them');
@@ -451,7 +548,7 @@ function bubbleEl(m, showSender) {
   bubble.className = 'bubble';
   const text = (m.body || '').trim();
   if (text) {
-    bubble.textContent = text;
+    setBubbleText(bubble, text, state.find.q);
   } else {
     bubble.classList.add('empty-body');
     bubble.textContent = m.subject ? `(本文なし) ${m.subject}` : '(本文なし)';
@@ -585,6 +682,7 @@ function renderStream(jump) {
       stream.scrollTop = stream.scrollHeight;
     }
   }
+  refreshFind(false);
 }
 
 /* ---------------- 返信 ---------------- */
@@ -660,8 +758,71 @@ async function setupCompose(conv) {
   $('send').disabled = true;
   autoGrow();
   state.aiLast = '';
+  restoreDraft(conv.key);
   setupAi(conv).catch(() => { state.ai = null; $('aiRow').hidden = true; });
 }
+
+/* ---------------- 下書き ----------------
+   書きかけは、会話ごとにこのパソコンの DB へ自動で保存する（送信はしない）。
+   同じ Fukidashi をスマホから開いても、続きを書ける。 */
+
+let draftTimer = null;
+let draftPending = null;   // {key, text}。まだ保存していない最新の内容
+
+function queueDraftSave() {
+  if (!state.replyCtx) return;
+  draftPending = { key: state.replyCtx.conv_key, text: $('draft').value };
+  clearTimeout(draftTimer);
+  draftTimer = setTimeout(flushDraft, 700);
+}
+
+async function flushDraft() {
+  clearTimeout(draftTimer);
+  const p = draftPending;
+  draftPending = null;
+  if (!p) return;
+  try {
+    await api('/api/draft', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(p),
+    });
+    markDraft(p.key, !!p.text.trim());
+  } catch (e) { /* 保存できなくても、書くのは続けられる */ }
+}
+
+function markDraft(key, has) {
+  const c = state.all.find((x) => x.key === key);
+  if (c && !!c.draft !== has) {
+    c.draft = has;
+    renderConversations();
+  }
+}
+
+async function restoreDraft(key) {
+  try {
+    const r = await api('/api/draft?key=' + encodeURIComponent(key));
+    // 待つ間に別の会話へ移った／もう書き始めていたら、上書きしない
+    if (state.activeKey !== key || $('draft').value || !r.text) return;
+    $('draft').value = r.text;
+    $('send').disabled = !r.text.trim() || !!state.pendingSend;
+    autoGrow();
+    toast('書きかけの返信を戻しました', 2500);
+  } catch (e) { /* 戻せなくても、新しく書ける */ }
+}
+
+// 画面を閉じる・隠すときに、保存し損ねないように送り切る
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden' && draftPending) {
+    const p = draftPending;
+    draftPending = null;
+    fetch('/api/draft', {
+      method: 'POST', keepalive: true,
+      headers: { 'Content-Type': 'application/json', 'X-Fukidashi-Token': TOKEN },
+      body: JSON.stringify(p),
+    }).catch(() => {});
+  }
+});
 
 function autoGrow() {
   const t = $('draft');
@@ -689,6 +850,14 @@ async function doSend() {
 
   $('draft').value = '';
   autoGrow();
+  draftPending = null;
+  clearTimeout(draftTimer);
+  const sentKey = state.replyCtx.conv_key;
+  state.lastSent = { key: sentKey, text };
+  api('/api/draft', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: sentKey, text: '' }),
+  }).then(() => markDraft(sentKey, false)).catch(() => {});
   state.pendingSend = res.id;
   showUndo(res);
 }
@@ -718,7 +887,22 @@ function showUndo(res) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: res.id }),
       });
-      toast(r.cancelled ? '送信を取り消しました' : '間に合いませんでした（すでに送信済みです）');
+      if (r.cancelled) {
+        // 取り消した文章は、入力欄に戻す（消えてしまわないように）
+        const ls = state.lastSent;
+        if (ls && state.replyCtx && state.replyCtx.conv_key === ls.key &&
+            !$('draft').value) {
+          $('draft').value = ls.text;
+          $('send').disabled = false;
+          autoGrow();
+          queueDraftSave();
+          toast('送信を取り消しました。文章は入力欄に戻しました');
+        } else {
+          toast('送信を取り消しました');
+        }
+      } else {
+        toast('間に合いませんでした（すでに送信済みです）');
+      }
     } catch (e) {
       toast('取り消せませんでした: ' + e.message);
     }
@@ -1195,6 +1379,7 @@ async function aiSuggest(more) {
     state.aiLast = res.text;
     $('send').disabled = !draft.value.trim();
     autoGrow();
+    queueDraftSave();
     draft.focus();
     toast('AI の案を入力欄に入れました。内容を確かめて、直してから送ってください。', 7000);
   } catch (e) {
@@ -1317,6 +1502,7 @@ $('search').addEventListener('input', (e) => {
 $('draft').addEventListener('input', () => {
   $('send').disabled = !$('draft').value.trim() || !!state.pendingSend;
   autoGrow();
+  queueDraftSave();
 });
 // Enter は改行。送信は押す操作だけにして、勢いでの誤送信を防ぐ。
 $('draft').addEventListener('keydown', (e) => {
@@ -1331,6 +1517,26 @@ for (const id of ['tabPeople', 'tabNotice']) {
   $(id).addEventListener('click', (e) => switchKind(e.currentTarget.dataset.kind));
 }
 $('awaitChip').addEventListener('click', toggleAwaiting);
+$('findOpen').addEventListener('click', openFindBar);
+$('findClose').addEventListener('click', closeFindBar);
+$('findPrev').addEventListener('click', () => stepFind(-1));
+$('findNext').addEventListener('click', () => stepFind(1));
+$('findAll').addEventListener('click', findAllOlder);
+let findTimer = null;
+$('findInput').addEventListener('input', (e) => {
+  clearTimeout(findTimer);
+  const v = e.target.value;
+  findTimer = setTimeout(() => {
+    state.find.q = v;
+    state.find.idx = -1;
+    state.find.scroll = true;
+    if (state.messages.length) renderStream(false);
+  }, 150);
+});
+$('findInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); stepFind(e.shiftKey ? 1 : -1); }
+  else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeFindBar(); }
+});
 $('sync').addEventListener('click', () => runSync(false));
 
 $('quit').addEventListener('click', async () => {

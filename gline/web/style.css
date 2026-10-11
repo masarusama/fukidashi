@@ -142,11 +142,35 @@ html, body {
   font-size: 10.5px; font-weight: 700; line-height: 17px;
   color: var(--unread); border: 1px solid var(--unread);
 }
+.draft-tag { color: var(--text-dim); border-color: var(--border); }
+.talk-tools { margin-left: auto; display: flex; gap: 6px; flex: none; }
 .await-btn {
-  margin-left: auto; flex: none; font: inherit; font-size: 12px;
+  flex: none; font: inherit; font-size: 12px;
   padding: 4px 10px; border-radius: 999px; cursor: pointer;
   border: 1px solid var(--border); background: none; color: var(--text-dim);
 }
+
+.findbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding: 7px 18px; background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.findbar input {
+  flex: 1; min-width: 140px; font: inherit; font-size: 13.5px;
+  padding: 5px 10px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+}
+.findbar input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.find-count { font-size: 12px; color: var(--text-dim); min-width: 4.5em; text-align: right; }
+.find-btn {
+  font: inherit; font-size: 12px; padding: 3px 9px; border-radius: 6px;
+  border: 1px solid var(--border); background: none; color: var(--text-dim);
+  cursor: pointer;
+}
+.bubble mark.hit {
+  background: #ffe08a; color: #222; border-radius: 3px; padding: 0 1px;
+}
+.bubble mark.hit.cur { background: #ff9f43; outline: 2px solid #ff9f43; }
 
 .searchbox input {
   width: 100%; font: inherit; font-size: 14px;
