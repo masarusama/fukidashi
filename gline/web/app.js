@@ -69,6 +69,34 @@ async function api(path, opts) {
   return data;
 }
 
+// 添付は、合言葉のヘッダが要るので fetch で受け取り、ファイルとして保存する。
+// 開くのではなくダウンロードにするのは、信用できないファイルを画面と同じ
+// 場所で解釈させないため。
+async function downloadAttachment(m, idx, name, btn) {
+  btn.disabled = true;
+  try {
+    const res = await fetch(
+      `/api/attachment?account=${encodeURIComponent(m.account)}&uid=${m.uid}&i=${idx}`,
+      { headers: { 'X-Fukidashi-Token': TOKEN } });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || ('HTTP ' + res.status));
+    }
+    const url = URL.createObjectURL(await res.blob());
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (e) {
+    toast('添付を取得できませんでした: ' + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 let toastTimer = null;
 function toast(msg, ms = 4000) {
   const el = $('toast');
@@ -377,11 +405,15 @@ function bubbleEl(m, showSender) {
   if (m.attachments && m.attachments.length) {
     const box = document.createElement('div');
     box.className = 'attach';
-    for (const name of m.attachments) {
-      const i = document.createElement('i');
-      i.textContent = '📎 ' + name;
-      box.appendChild(i);
-    }
+    m.attachments.forEach((name, idx) => {
+      const b = document.createElement('button');
+      b.className = 'attach-btn';
+      b.type = 'button';
+      b.textContent = '📎 ' + name;
+      b.title = 'ダウンロード';
+      b.addEventListener('click', () => downloadAttachment(m, idx, name, b));
+      box.appendChild(b);
+    });
     bubble.appendChild(box);
   }
 

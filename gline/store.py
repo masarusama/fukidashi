@@ -4,10 +4,12 @@
 届いている場合は dup=1 を立てて、表示側では1通として扱う。
 """
 
+import email
 import json
 import re
 import sqlite3
 import threading
+import zlib
 from pathlib import Path
 
 from . import mailparse
@@ -472,6 +474,25 @@ def message_full(conn, account, uid):
         "subject": row["subject"] or "",
         "from_addr": row["from_addr"] or "",
     }
+
+
+def attachment(conn, account, uid, index):
+    """index 番目の添付を (名前, バイト列) で返す。
+
+    取り込み済みの生データから取り出す（Gmail には接続しない）。
+    生データが無い（大きすぎて取り込まなかった等）・番号が範囲外なら None。
+    """
+    row = conn.execute(
+        "SELECT raw FROM messages WHERE account=? AND uid=?",
+        (account, uid)).fetchone()
+    if not row or not row["raw"]:
+        return None
+    msg = email.message_from_bytes(zlib.decompress(row["raw"]))
+    parts = mailparse.attachment_parts(msg)
+    if not 0 <= index < len(parts):
+        return None
+    name, part = parts[index]
+    return name, part.get_payload(decode=True) or b""
 
 
 def stats(conn, cfg=None):

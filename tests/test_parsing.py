@@ -35,6 +35,26 @@ def check_true(name, got):
     check(name, bool(got), True)
 
 
+# ---------------------------------------------------------------- 添付
+
+_MULTI = email.message_from_bytes(
+    b"From: a@x.com\r\nMIME-Version: 1.0\r\n"
+    b"Content-Type: multipart/mixed; boundary=B\r\n\r\n"
+    b"--B\r\nContent-Type: text/plain\r\n\r\nhi\r\n"
+    b"--B\r\nContent-Type: image/png\r\n"
+    b"Content-Disposition: attachment; filename=\"p.png\"\r\n"
+    b"Content-Transfer-Encoding: base64\r\n\r\nAQID\r\n"
+    b"--B\r\nContent-Type: application/pdf; name=\"d.pdf\"\r\n"
+    b"Content-Transfer-Encoding: base64\r\n\r\nBAUG\r\n--B--\r\n")
+check("添付の名前の並びと取り出しの並びが一致する",
+      [n for n, _ in mailparse.attachment_parts(_MULTI)],
+      mailparse.extract(_MULTI)[2])
+check("添付の中身を取り出せる",
+      [p.get_payload(decode=True) for _, p in mailparse.attachment_parts(_MULTI)],
+      [b"\x01\x02\x03", b"\x04\x05\x06"])
+check("単一パートのメールに添付は無い",
+      mailparse.attachment_parts(email.message_from_bytes(b"From: a@x.com\r\n\r\nhi")), [])
+
 # ---------------------------------------------------------------- 引用剥がし
 
 check("英語Gmailの返信引用を落とす",

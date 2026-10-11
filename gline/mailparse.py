@@ -364,6 +364,19 @@ def _is_attachment(part):
     return bool(part.get_filename())
 
 
+def attachment_parts(msg):
+    """添付の (名前, パート) を、extract() の添付名リストと同じ順で返す。"""
+    out = []
+    if msg.is_multipart():
+        for part in msg.walk():
+            if part.get_content_maintype() == "multipart":
+                continue
+            if _is_attachment(part):
+                name = header_text(part.get_filename() or "") or "(名前なし)"
+                out.append((name, part))
+    return out
+
+
 def extract(msg):
     """(本文テキスト, 引用込み本文, 添付ファイル名リスト) を返す。"""
     plain, html, attachments = [], [], []

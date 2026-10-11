@@ -77,6 +77,26 @@ db.execute(
     " ('me@example.com', 1, '<orig@example.com>', 'alice@example.com', 100,"
     " 'alice@example.com', '[\"me@example.com\"]', 'hello', 0, 'hi', 'hi', '[]', ?)",
     (raw,))
+# 添付つき（HTML と、パスを含む危険な名前）
+att_raw = zlib.compress(
+    b"From: Alice <alice@example.com>\r\nTo: me@example.com\r\n"
+    b"Subject: files\r\nMessage-ID: <att@example.com>\r\n"
+    b"MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=XX\r\n\r\n"
+    b"--XX\r\nContent-Type: text/plain\r\n\r\nsee attached\r\n"
+    b"--XX\r\nContent-Type: text/html; name=a.html\r\n"
+    b"Content-Disposition: attachment; filename=\"a.html\"\r\n"
+    b"Content-Transfer-Encoding: base64\r\n\r\n"
+    + __import__("base64").b64encode(b"<script>alert(1)</script>") + b"\r\n"
+    b"--XX\r\nContent-Type: application/pdf\r\n"
+    b"Content-Disposition: attachment; filename=\"../../x\\\"y.pdf\"\r\n"
+    b"Content-Transfer-Encoding: base64\r\n\r\n"
+    + __import__("base64").b64encode(b"%PDF-1.4 data") + b"\r\n--XX--\r\n")
+db.execute(
+    "INSERT INTO messages (account, uid, message_id, conv_key, ts, from_addr,"
+    " to_json, subject, is_me, body, body_full, attachments, raw) VALUES"
+    " ('me@example.com', 2, '<att@example.com>', 'alice@example.com', 200,"
+    " 'alice@example.com', '[\"me@example.com\"]', 'files', 0, 'see attached',"
+    " 'see attached', '[\"a.html\", \"x.pdf\"]', ?)", (att_raw,))
 db.commit()
 db.close()
 
@@ -155,6 +175,40 @@ code, res3 = fetch("/api/send", data={"key": "alice@example.com", "text": "送�
 check("2通目も受け付ける", code, 200)
 time.sleep(1.8)
 check("猶予後に送られる", len(sent), 1)
+
+# 添付のダウンロード
+def raw_get(path, token=None):
+    req = urllib.request.Request(BASE + path)
+    if token:
+        req.add_header(server.TOKEN_HEADER, token)
+    try:
+        with urllib.request.urlopen(req, timeout=5) as res:
+            return res.status, dict(res.headers), res.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, dict(exc.headers), exc.read()
+
+A = "/api/attachment?account=me%40example.com&uid=2&i="
+code, hdr, body_ = raw_get(A + "0", token)
+check("添付が取れる", (code, body_), (200, b"<script>alert(1)</script>"))
+check("HTML でも octet-stream（画面で解釈させない）",
+      hdr.get("Content-Type"), "application/octet-stream")
+check("常に attachment", hdr.get("Content-Disposition", "").startswith("attachment"), True)
+check("sandbox の CSP", hdr.get("Content-Security-Policy"), "sandbox")
+code, hdr, body_ = raw_get(A + "1", token)
+check("2つ目の添付", body_, b"%PDF-1.4 data")
+cd = hdr.get("Content-Disposition", "")
+check("名前のパス区切りと引用符が消える", "/" not in cd.split("''")[1] and "%22" not in cd
+      and "%5C" not in cd, True)
+check("合言葉なしは断る", raw_get(A + "0")[0], 403)
+check("範囲外の番号は 404", raw_get(A + "9", token)[0], 404)
+check("負の番号は 404", raw_get(A + "-1", token)[0], 404)
+check("数字でない番号は 404", raw_get(A + "x", token)[0], 404)
+check("添付のないメールは 404",
+      raw_get("/api/attachment?account=me%40example.com&uid=1&i=0", token)[0], 404)
+check("知らないメールは 404",
+      raw_get("/api/attachment?account=me%40example.com&uid=99&i=0", token)[0], 404)
+check("よそのサイトの Host は断る",
+      fetch(A + "0", token=token, host="evil.example.com")[0], 403)
 
 # 異常系
 check("会話の指定なしは断る", fetch("/api/send", data={"text": "x"}, token=token)[0], 400)

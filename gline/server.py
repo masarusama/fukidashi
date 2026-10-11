@@ -13,11 +13,12 @@ import sys
 import threading
 import time
 import traceback
+import zlib
 from html import escape
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from . import ai, config, imapsync, qr, smtpsend, store
 
@@ -577,11 +578,14 @@ def make_handler(cfg, db, runner, control, token, outbox, mobile=None, lan=None)
             pass  # アクセスログは黙らせる
 
         # -- 返信ヘルパ ---------------------------------------------------
-        def _send(self, code, body, ctype="application/json; charset=utf-8"):
+        def _send(self, code, body, ctype="application/json; charset=utf-8",
+                  headers=None):
             if isinstance(body, str):
                 body = body.encode("utf-8")
             self.send_response(code)
             self.send_header("Content-Type", ctype)
+            for k, v in (headers or {}).items():
+                self.send_header(k, v)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
@@ -836,7 +840,35 @@ def make_handler(cfg, db, runner, control, token, outbox, mobile=None, lan=None)
                     return self._json({"error": "見つかりません"}, 404)
                 return self._json(data)
 
+            if u.path == "/api/attachment":
+                return self._attachment(one("account"), one("uid"), one("i"))
+
             self._send(404, "not found", "text/plain; charset=utf-8")
+
+        def _attachment(self, acct, uid, idx):
+            """添付を、開かずに「ダウンロード」として渡す。
+
+            添付は信用できない第三者のファイル。ブラウザに中身を解釈させる
+            （HTML や SVG をこの画面と同じ場所で開く）と、メールの中身を
+            盗まれる。そのため常に octet-stream + attachment で返し、
+            サンドボックスの CSP も付ける。
+            """
+            try:
+                found = store.attachment(db, acct, int(uid), int(idx)) \
+                    if acct and uid and idx is not None else None
+            except (ValueError, zlib.error):
+                found = None
+            if found is None:
+                return self._json({"error": "添付が見つかりません"
+                                   "（大きいメールは本文ごと取り込んでいません）"}, 404)
+            name, data = found
+            safe = re.sub(r'[\x00-\x1f\x7f/\\:*?"<>|]', "_", name).strip(". ") \
+                or "attachment"
+            self._send(200, data, "application/octet-stream", {
+                "Content-Disposition":
+                    "attachment; filename*=UTF-8''" + quote(safe, safe=""),
+                "Content-Security-Policy": "sandbox",
+            })
 
     return Handler
 
