@@ -22,7 +22,7 @@ DEFAULTS = {
     "force_people": [],
     "force_notices": [],
     "mute": [],
-    "port": 8765,
+    "port": 8777,
     "db_path": "data/mail.db",
     "max_fetch_bytes": 5000000,
     "ai_model": "",

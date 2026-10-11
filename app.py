@@ -137,7 +137,7 @@ def first_run():
         "force_people": [],
         "force_notices": [],
         "mute": [],
-        "port": 8765,
+        "port": 8777,
         "db_path": str(DB),
     }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 

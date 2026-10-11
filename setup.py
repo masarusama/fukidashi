@@ -162,7 +162,7 @@ def main():
         "force_people": [],
         "force_notices": [],
         "mute": [],
-        "port": 8765,
+        "port": 8777,
     }
     cfg_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n",
                         encoding="utf-8")
